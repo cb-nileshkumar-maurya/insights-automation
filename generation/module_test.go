@@ -103,6 +103,29 @@ func TestCardSetKeepsSuccessfulChildCurrentWhenAnotherChildFails(t *testing.T) {
 	}
 }
 
+func TestNormalCardSetDoesNotRecomputeCurrentChildren(t *testing.T) {
+	responses := map[TemplateID]GeneratedData{}
+	for _, template := range DefaultConfiguration().CardSets["pre_toss_v1"] {
+		responses[template] = GeneratedData{SampleSize: 10}
+	}
+	data := &ScriptedCricketData{Responses: responses}
+	module := NewModule(DefaultConfiguration(), data, NewMemoryRunStore(), ClockFunc(func() Time { return ParseTime("2026-09-08T10:00:00Z") }))
+	request := StartRequest{Target: CardTarget{CardSet: "pre_toss_v1"}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"team_a": "india", "team_b": "australia", "players": []string{"p1"}, "venue": "wankhede", "format": "t20"}}
+	if _, err := module.StartRun(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	module.runAll(context.Background())
+	queries := len(data.Queries)
+	second, err := module.StartRun(context.Background(), request)
+	if err != nil || second.State != Succeeded || len(second.Children) != 0 {
+		t.Fatalf("second card-set run = %#v, %v", second, err)
+	}
+	module.runAll(context.Background())
+	if len(data.Queries) != queries {
+		t.Fatalf("current card set ran %d extra queries", len(data.Queries)-queries)
+	}
+}
+
 func TestStaleResultsAreRetainedButNotReturnedAsCurrent(t *testing.T) {
 	now := ParseTime("2026-09-08T10:00:00Z")
 	module := NewModule(DefaultConfiguration(), &ScriptedCricketData{Responses: map[TemplateID]GeneratedData{TeamForm: {SampleSize: 5}}}, NewMemoryRunStore(), ClockFunc(func() Time { return now }))

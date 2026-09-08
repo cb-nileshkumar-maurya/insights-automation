@@ -61,16 +61,30 @@ func (m *Module) startCardSet(request StartRequest) (Run, error) {
 	}
 	m.store.mu.Lock()
 	defer m.store.mu.Unlock()
+	if request.Mode == Normal {
+		for _, existing := range m.store.runs {
+			if existing.Target == request.Target && existing.MatchID == request.MatchID && existing.CardState == request.CardState && existing.Mode == Normal && (existing.State == Queued || existing.State == Running) && reflect.DeepEqual(existing.NormalizedInputs, request.Inputs) {
+				return *existing, nil
+			}
+		}
+	}
 	parent := m.newRunLocked(request, canonicalInputs(request.Inputs), "")
 	for _, id := range templates {
-		inputs, err := validate(m.config.Templates[id], inputsForTemplate(m.config.Templates[id], request.Inputs))
+		template := m.config.Templates[id]
+		inputs, err := validate(template, inputsForTemplate(template, request.Inputs))
 		if err != nil {
 			return Run{}, err
+		}
+		if request.Mode == Normal && m.currentLocked(id, request.MatchID, request.CardState, inputs) != nil {
+			continue
 		}
 		childRequest := request
 		childRequest.Target = CardTarget{Template: id}
 		child := m.newRunLocked(childRequest, inputs, parent.ID)
 		parent.Children = append(parent.Children, child.ID)
+	}
+	if len(parent.Children) == 0 {
+		parent.State = Succeeded
 	}
 	return *parent, nil
 }
