@@ -159,6 +159,73 @@ WHERE c.template_id = ? AND c.template_version = ? AND c.match_id = ?
 	return result, nil
 }
 
+// ClaimNext leases one queued child run. Manual regenerations sort before normal
+// work through the persisted priority column, but all work uses the same lease.
+func (s *SQLRunStore) ClaimNext(ctx context.Context, workerID string, now time.Time) (Run, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Run{}, false, fmt.Errorf("begin run claim: %w", err)
+	}
+	defer tx.Rollback()
+	var id string
+	err = tx.QueryRowContext(ctx, `
+SELECT id FROM generation_runs
+WHERE state = 'queued' AND template_id IS NOT NULL
+ORDER BY priority DESC, created_at ASC
+LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&id)
+	if err == sql.ErrNoRows {
+		return Run{}, false, nil
+	}
+	if err != nil {
+		return Run{}, false, fmt.Errorf("find queued generation run: %w", err)
+	}
+	leaseUntil := now.Add(60 * time.Second)
+	if _, err := tx.ExecContext(ctx, `
+UPDATE generation_runs
+SET state = 'running', lease_owner = ?, lease_until = ?, updated_at = ?
+WHERE id = ?`, workerID, leaseUntil, now, id); err != nil {
+		return Run{}, false, fmt.Errorf("lease generation run: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Run{}, false, fmt.Errorf("commit run claim: %w", err)
+	}
+	run, err := s.LoadRun(ctx, id)
+	if err != nil {
+		return Run{}, false, err
+	}
+	return run, true, nil
+}
+
+func (s *SQLRunStore) RenewLease(ctx context.Context, runID, workerID string, now time.Time) (bool, error) {
+	updated, err := s.db.ExecContext(ctx, `
+UPDATE generation_runs
+SET lease_until = ?, updated_at = ?
+WHERE id = ? AND state = 'running' AND lease_owner = ?`, now.Add(60*time.Second), now, runID, workerID)
+	if err != nil {
+		return false, fmt.Errorf("renew generation lease: %w", err)
+	}
+	count, err := updated.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read renewed lease count: %w", err)
+	}
+	return count == 1, nil
+}
+
+func (s *SQLRunStore) RecoverExpiredLeases(ctx context.Context, now time.Time) (int64, error) {
+	updated, err := s.db.ExecContext(ctx, `
+UPDATE generation_runs
+SET state = 'queued', lease_owner = NULL, lease_until = NULL, updated_at = ?
+WHERE state = 'running' AND lease_until < ?`, now, now)
+	if err != nil {
+		return 0, fmt.Errorf("recover expired generation leases: %w", err)
+	}
+	count, err := updated.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read recovered lease count: %w", err)
+	}
+	return count, nil
+}
+
 func priorityFor(mode RunMode) int {
 	if mode == Regeneration {
 		return 1
