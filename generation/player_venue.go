@@ -2,7 +2,9 @@ package generation
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"strings"
 )
 
 const playerVenueMinimumInnings = 15
@@ -79,4 +81,62 @@ func playerIDs(raw any) ([]int, error) {
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+type MariaDBPlayerVenueHistory struct{ db *sql.DB }
+
+func NewMariaDBPlayerVenueHistory(db *sql.DB) *MariaDBPlayerVenueHistory {
+	return &MariaDBPlayerVenueHistory{db: db}
+}
+func OpenMariaDBPlayerVenueGenerator(ctx context.Context) (*PlayerVenueGenerator, *sql.DB, error) {
+	db, err := OpenReadReplica(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return NewPlayerVenueGenerator(NewMariaDBPlayerVenueHistory(db)), db, nil
+}
+func (h *MariaDBPlayerVenueHistory) PlayerVenueStats(ctx context.Context, players []int, venue, format int, window string, career bool) (map[int]PlayerVenueDiscipline, map[int]PlayerVenueDiscipline, error) {
+	marks, args := playerPlaceholders(players)
+	filter := "m.match_type_id = ?"
+	args = append(args, format)
+	if !career {
+		filter += " AND m.venueid = ?"
+		args = append(args, venue)
+	}
+	if window == "since_2024" && !career {
+		filter += " AND m.startdt >= '2024-01-01'"
+	}
+	batting, err := h.read(ctx, `SELECT b.playerId, COUNT(*), COALESCE(SUM(b.runs),0), COALESCE(SUM(b.balls),0), 0, 0 FROM stats_import3_dump_battingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.playerId IN (`+marks+`) AND `+filter+` GROUP BY b.playerId`, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	bowling, err := h.read(ctx, `SELECT b.bowlerId, COUNT(*), 0, 0, COALESCE(SUM(b.wickets),0), COALESCE(SUM(b.runsGiven),0) FROM stats_import3_dump_bowlingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.bowlerId IN (`+marks+`) AND `+filter+` GROUP BY b.bowlerId`, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return batting, bowling, nil
+}
+func (h *MariaDBPlayerVenueHistory) read(ctx context.Context, statement string, args ...any) (map[int]PlayerVenueDiscipline, error) {
+	rows, err := h.db.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := map[int]PlayerVenueDiscipline{}
+	for rows.Next() {
+		var player int
+		var stat PlayerVenueDiscipline
+		if err := rows.Scan(&player, &stat.Innings, &stat.Runs, &stat.Balls, &stat.Wickets, &stat.RunsConceded); err != nil {
+			return nil, err
+		}
+		values[player] = stat
+	}
+	return values, rows.Err()
+}
+func playerPlaceholders(players []int) (string, []any) {
+	marks, args := make([]string, len(players)), make([]any, len(players))
+	for index, player := range players {
+		marks[index], args[index] = "?", player
+	}
+	return strings.Join(marks, ","), args
 }
