@@ -51,7 +51,11 @@ func (g *TeamFormGenerator) Generate(ctx context.Context, query GenerationQuery)
 		return GeneratedData{Err: &RunFailure{Kind: SampleFailure, Message: "no comparable team form matches"}}
 	}
 	data := map[string]any{"teams": []any{teamFormEntry(teamA, a, latest), teamFormEntry(teamB, b, latest)}}
-	return GeneratedData{Data: data, SampleSize: len(a) + len(b), SourceDataWindow: "latest " + fmt.Sprint(latest) + " matches"}
+	fallbacks := []string{}
+	if len(a) < latest || len(b) < latest {
+		fallbacks = append(fallbacks, "available_history")
+	}
+	return GeneratedData{Data: data, SampleSize: len(a) + len(b), Fallbacks: fallbacks, SourceDataWindow: "latest " + fmt.Sprint(latest) + " matches"}
 }
 func teamFormEntry(team int, matches []TeamFormMatch, requested int) map[string]any {
 	wins, losses, draws := 0, 0, 0
@@ -80,6 +84,13 @@ type MariaDBTeamFormHistory struct{ db *sql.DB }
 
 func NewMariaDBTeamFormHistory(db *sql.DB) *MariaDBTeamFormHistory {
 	return &MariaDBTeamFormHistory{db: db}
+}
+func OpenMariaDBTeamFormGenerator(ctx context.Context) (*TeamFormGenerator, *sql.DB, error) {
+	db, err := OpenReadReplica(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return NewTeamFormGenerator(NewMariaDBTeamFormHistory(db)), db, nil
 }
 func (h *MariaDBTeamFormHistory) FindTeamForm(ctx context.Context, team, format, latest int) ([]TeamFormMatch, error) {
 	rows, err := h.db.QueryContext(ctx, `SELECT m.id, COALESCE(m.winner, 0), COALESCE(r.winningMargin, 0), COALESCE(r.winByRuns, 0), m.startdt FROM krik_match_archive m LEFT JOIN stats_import3_dump_matchresult_tbl r ON r.matchId = m.id WHERE (m.teama = ? OR m.teamb = ?) AND m.match_type_id = ? AND m.isArchived = 1 ORDER BY m.startdt DESC LIMIT ?`, team, team, format, latest)
