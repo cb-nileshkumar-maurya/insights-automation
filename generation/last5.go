@@ -68,7 +68,7 @@ func formArrow(games []PlayerGame, career PlayerCareerComparison) string {
 		}
 		return "level"
 	}
-	average := float64(runs) / float64(len(games))
+	average := float64(runs) / float64(battingAppearances)
 	if average > career.BattingAverage {
 		return "up"
 	}
@@ -96,7 +96,7 @@ func (h *MariaDBLast5History) LastGames(ctx context.Context, players []int, form
 	recentArgs = append(recentArgs, format)
 	recentArgs = append(recentArgs, ids...)
 	recentArgs = append(recentArgs, format, latest)
-	rows, err := h.db.QueryContext(ctx, `WITH activity AS (SELECT b.playerId AS player_id, b.matchId AS match_id, m.startdt FROM stats_import3_dump_battingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.playerId IN (`+marks+`) AND m.match_type_id = ? UNION SELECT b.bowlerId, b.matchId, m.startdt FROM stats_import3_dump_bowlingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.bowlerId IN (`+marks+`) AND m.match_type_id = ?), ranked AS (SELECT player_id, match_id, startdt, ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY startdt DESC) AS position FROM activity) SELECT r.player_id, r.match_id, COALESCE(SUM(bat.runs),0), COALESCE(SUM(bat.balls),0), COALESCE(SUM(bowl.wickets),0), COALESCE(SUM(bowl.runsGiven),0) FROM ranked r LEFT JOIN stats_import3_dump_battingcard_tbl bat ON bat.playerId = r.player_id AND bat.matchId = r.match_id LEFT JOIN stats_import3_dump_bowlingcard_tbl bowl ON bowl.bowlerId = r.player_id AND bowl.matchId = r.match_id WHERE r.position <= ? GROUP BY r.player_id, r.match_id, r.startdt ORDER BY r.player_id, r.startdt DESC`, recentArgs...)
+	rows, err := h.db.QueryContext(ctx, `WITH activity AS (SELECT b.playerId AS player_id, b.matchId AS match_id, m.startdt FROM stats_import3_dump_battingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.playerId IN (`+marks+`) AND m.match_type_id = ? UNION SELECT b.bowlerId, b.matchId, m.startdt FROM stats_import3_dump_bowlingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.bowlerId IN (`+marks+`) AND m.match_type_id = ?), ranked AS (SELECT player_id, match_id, startdt, ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY startdt DESC, match_id DESC) AS position FROM activity) SELECT r.player_id, r.match_id, COALESCE(SUM(bat.runs),0), COALESCE(SUM(bat.balls),0), COALESCE(SUM(bowl.wickets),0), COALESCE(SUM(bowl.runsGiven),0) FROM ranked r LEFT JOIN stats_import3_dump_battingcard_tbl bat ON bat.playerId = r.player_id AND bat.matchId = r.match_id LEFT JOIN stats_import3_dump_bowlingcard_tbl bowl ON bowl.bowlerId = r.player_id AND bowl.matchId = r.match_id WHERE r.position <= ? GROUP BY r.player_id, r.match_id, r.startdt ORDER BY r.player_id, r.startdt DESC, r.match_id DESC`, recentArgs...)
 	if err != nil {
 		return nil, nil, err
 	}
