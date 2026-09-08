@@ -4,7 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"strings"
+	"time"
 
+	"github.com/go-sql-driver/mysql"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -45,4 +49,38 @@ func OpenSQLRunStore(ctx context.Context, config DatabaseConfig) (*SQLRunStore, 
 		return nil, err
 	}
 	return store, nil
+}
+
+func ReadReplicaConfigFromEnvironment() (DatabaseConfig, error) {
+	username := os.Getenv("SITE_DB_USERNAME_NOMAD")
+	password := os.Getenv("SITE_DB_PASSWORD_NOMAD")
+	host := os.Getenv("SITE_DB_HOST")
+	database := os.Getenv("SITE_DB")
+	if username == "" || password == "" || host == "" || database == "" {
+		return DatabaseConfig{}, fmt.Errorf("SITE_DB_USERNAME_NOMAD, SITE_DB_PASSWORD_NOMAD, SITE_DB_HOST, and SITE_DB must be set")
+	}
+	if !strings.Contains(host, ":") {
+		host += ":3306"
+	}
+	config := mysql.NewConfig()
+	config.User, config.Passwd, config.Net, config.Addr, config.DBName = username, password, "tcp", host, database
+	config.ParseTime, config.Loc, config.TLSConfig = true, time.UTC, "preferred"
+	config.Params = map[string]string{"zeroDateTimeBehavior": "round", "characterEncoding": "UTF-8"}
+	return DatabaseConfig{Dialect: MariaDB, DSN: config.FormatDSN()}, nil
+}
+
+func OpenReadReplica(ctx context.Context) (*sql.DB, error) {
+	config, err := ReadReplicaConfigFromEnvironment()
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("mysql", config.DSN)
+	if err != nil {
+		return nil, fmt.Errorf("open MariaDB replica: %w", err)
+	}
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping MariaDB replica: %w", err)
+	}
+	return db, nil
 }
