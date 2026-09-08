@@ -50,9 +50,23 @@ func formArrow(games []PlayerGame, career PlayerCareerComparison) string {
 	if len(games) == 0 {
 		return "unavailable"
 	}
-	runs := 0
+	runs, wickets, battingAppearances := 0, 0, 0
 	for _, game := range games {
 		runs += game.BattingRuns
+		wickets += game.BowlingWickets
+		if game.BattingBalls > 0 {
+			battingAppearances++
+		}
+	}
+	if battingAppearances == 0 {
+		average := float64(wickets) / float64(len(games))
+		if average > career.BowlingWicketsPerGame {
+			return "up"
+		}
+		if average < career.BowlingWicketsPerGame {
+			return "down"
+		}
+		return "level"
 	}
 	average := float64(runs) / float64(len(games))
 	if average > career.BattingAverage {
@@ -78,8 +92,11 @@ func OpenMariaDBLast5GamesGenerator(ctx context.Context) (*Last5GamesGenerator, 
 
 func (h *MariaDBLast5History) LastGames(ctx context.Context, players []int, format, latest int) (map[int][]PlayerGame, map[int]PlayerCareerComparison, error) {
 	marks, ids := playerPlaceholders(players)
-	args := append(ids, format, latest)
-	rows, err := h.db.QueryContext(ctx, `WITH ranked AS (SELECT b.playerId, b.matchId, b.runs, b.balls, ROW_NUMBER() OVER (PARTITION BY b.playerId ORDER BY m.startdt DESC) AS position FROM stats_import3_dump_battingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.playerId IN (`+marks+`) AND m.match_type_id = ?) SELECT playerId, matchId, runs, balls FROM ranked WHERE position <= ?`, args...)
+	recentArgs := append([]any{}, ids...)
+	recentArgs = append(recentArgs, format)
+	recentArgs = append(recentArgs, ids...)
+	recentArgs = append(recentArgs, format, latest)
+	rows, err := h.db.QueryContext(ctx, `WITH activity AS (SELECT b.playerId AS player_id, b.matchId AS match_id, m.startdt FROM stats_import3_dump_battingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.playerId IN (`+marks+`) AND m.match_type_id = ? UNION SELECT b.bowlerId, b.matchId, m.startdt FROM stats_import3_dump_bowlingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.bowlerId IN (`+marks+`) AND m.match_type_id = ?), ranked AS (SELECT player_id, match_id, startdt, ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY startdt DESC) AS position FROM activity) SELECT r.player_id, r.match_id, COALESCE(SUM(bat.runs),0), COALESCE(SUM(bat.balls),0), COALESCE(SUM(bowl.wickets),0), COALESCE(SUM(bowl.runsGiven),0) FROM ranked r LEFT JOIN stats_import3_dump_battingcard_tbl bat ON bat.playerId = r.player_id AND bat.matchId = r.match_id LEFT JOIN stats_import3_dump_bowlingcard_tbl bowl ON bowl.bowlerId = r.player_id AND bowl.matchId = r.match_id WHERE r.position <= ? GROUP BY r.player_id, r.match_id, r.startdt ORDER BY r.player_id, r.startdt DESC`, recentArgs...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -88,37 +105,12 @@ func (h *MariaDBLast5History) LastGames(ctx context.Context, players []int, form
 	for rows.Next() {
 		var player int
 		var game PlayerGame
-		if err := rows.Scan(&player, &game.MatchID, &game.BattingRuns, &game.BattingBalls); err != nil {
+		if err := rows.Scan(&player, &game.MatchID, &game.BattingRuns, &game.BattingBalls, &game.BowlingWickets, &game.BowlingRuns); err != nil {
 			return nil, nil, err
 		}
 		games[player] = append(games[player], game)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	bowlRows, err := h.db.QueryContext(ctx, `WITH ranked AS (SELECT b.bowlerId, b.matchId, b.wickets, b.runsGiven, ROW_NUMBER() OVER (PARTITION BY b.bowlerId ORDER BY m.startdt DESC) AS position FROM stats_import3_dump_bowlingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.bowlerId IN (`+marks+`) AND m.match_type_id = ?) SELECT bowlerId, matchId, wickets, runsGiven FROM ranked WHERE position <= ?`, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer bowlRows.Close()
-	for bowlRows.Next() {
-		var player int
-		var matchID, wickets, runs int
-		if err := bowlRows.Scan(&player, &matchID, &wickets, &runs); err != nil {
-			return nil, nil, err
-		}
-		merged := false
-		for index := range games[player] {
-			if games[player][index].MatchID == matchID {
-				games[player][index].BowlingWickets, games[player][index].BowlingRuns, merged = wickets, runs, true
-				break
-			}
-		}
-		if !merged {
-			games[player] = append(games[player], PlayerGame{MatchID: matchID, BowlingWickets: wickets, BowlingRuns: runs})
-		}
-	}
-	if err := bowlRows.Err(); err != nil {
 		return nil, nil, err
 	}
 	careerRows, err := h.db.QueryContext(ctx, `SELECT b.playerId, AVG(b.runs) FROM stats_import3_dump_battingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.playerId IN (`+marks+`) AND m.match_type_id = ? GROUP BY b.playerId`, append(ids, format)...)
