@@ -17,6 +17,9 @@ type VenueHistory interface {
 	VenueMatches(context.Context, int, int, string) ([]VenueMatch, error)
 	CountryMatches(context.Context, int, int, string) ([]VenueMatch, error)
 }
+type VenuePhaseHistory interface {
+	VenuePhaseBenchmarks(context.Context, int, int, string, bool) (map[string]any, error)
+}
 type VenueDNAGenerator struct{ history VenueHistory }
 
 func NewVenueDNAGenerator(history VenueHistory) *VenueDNAGenerator {
@@ -65,7 +68,14 @@ func (g *VenueDNAGenerator) Generate(ctx context.Context, query GenerationQuery)
 			chaseWins++
 		}
 	}
-	data := map[string]any{"average_first_innings_score": float64(firstTotal) / float64(len(matches)), "bat_first_win_rate": float64(batFirstWins) * 100 / float64(len(matches)), "chase_win_rate": float64(chaseWins) * 100 / float64(len(matches)), "high_total": high, "low_total": low, "match_phase_benchmarks": map[string]any{}}
+	phaseBenchmarks := map[string]any{}
+	if phases, ok := g.history.(VenuePhaseHistory); ok {
+		phaseBenchmarks, err = phases.VenuePhaseBenchmarks(ctx, venue, format, window, len(fallbacks) > 0)
+		if err != nil {
+			return GeneratedData{Err: &RunFailure{Kind: TransientFailure, Message: err.Error()}}
+		}
+	}
+	data := map[string]any{"average_first_innings_score": float64(firstTotal) / float64(len(matches)), "bat_first_win_rate": float64(batFirstWins) * 100 / float64(len(matches)), "chase_win_rate": float64(chaseWins) * 100 / float64(len(matches)), "high_total": high, "low_total": low, "match_phase_benchmarks": phaseBenchmarks}
 	return GeneratedData{Data: data, SampleSize: len(matches), Fallbacks: fallbacks, SourceDataWindow: fmt.Sprintf("%s window", window)}
 }
 
@@ -105,4 +115,31 @@ func (h *MariaDBVenueHistory) find(ctx context.Context, population string, args 
 		matches = append(matches, match)
 	}
 	return matches, rows.Err()
+}
+
+func (h *MariaDBVenueHistory) VenuePhaseBenchmarks(ctx context.Context, venue, format int, window string, countryFallback bool) (map[string]any, error) {
+	population, args := "m.venueid = ?", []any{venue}
+	if countryFallback {
+		population = "m.venueid IN (SELECT id FROM krik_match_venue WHERE country_id = (SELECT country_id FROM krik_match_venue WHERE id = ?))"
+	}
+	dateClause := ""
+	if window == "since_2024" {
+		dateClause = " AND m.startdt >= '2024-01-01'"
+	}
+	args = append(args, format)
+	rows, err := h.db.QueryContext(ctx, `WITH comparable_matches AS (SELECT m.id FROM krik_match_archive m WHERE `+population+` AND m.match_type_id = ? AND m.isArchived = 1`+dateClause+`) SELECT CASE WHEN b.ballNbr <= 6 THEN 'powerplay' WHEN b.ballNbr <= 15 THEN 'middle' ELSE 'death' END, AVG(b.totalRuns) FROM krik_ball_by_ball_archive b JOIN comparable_matches c ON c.id = b.matchId GROUP BY 1`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	benchmarks := map[string]any{}
+	for rows.Next() {
+		var phase string
+		var average float64
+		if err := rows.Scan(&phase, &average); err != nil {
+			return nil, err
+		}
+		benchmarks[phase] = map[string]any{"average_runs_per_delivery": average}
+	}
+	return benchmarks, rows.Err()
 }
