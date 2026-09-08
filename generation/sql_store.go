@@ -98,6 +98,67 @@ ON DUPLICATE KEY UPDATE generation_result_id = VALUES(generation_result_id), upd
 	return nil
 }
 
+func (s *SQLRunStore) LoadRun(ctx context.Context, id string) (Run, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, COALESCE(parent_id, ''), COALESCE(template_id, ''), COALESCE(card_set_id, ''),
+  match_id, card_state, normalized_inputs, mode, state, attempt, COALESCE(result_version, 0),
+  COALESCE(failure_kind, ''), COALESCE(failure_message, ''), lease_until, created_at
+FROM generation_runs WHERE id = ?`, id)
+	var run Run
+	var inputs []byte
+	var template, cardSet, state, mode, cardState, failureKind, failureMessage string
+	var leaseUntil sql.NullTime
+	if err := row.Scan(&run.ID, &run.ParentID, &template, &cardSet, &run.MatchID, &cardState, &inputs, &mode, &state, &run.Attempt, &run.ResultVersion, &failureKind, &failureMessage, &leaseUntil, &run.CreatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return Run{}, ErrNotFound
+		}
+		return Run{}, fmt.Errorf("load generation run: %w", err)
+	}
+	if err := json.Unmarshal(inputs, &run.NormalizedInputs); err != nil {
+		return Run{}, fmt.Errorf("decode normalized inputs: %w", err)
+	}
+	run.Target = CardTarget{Template: TemplateID(template), CardSet: cardSet}
+	run.CardState, run.Mode, run.State = CardState(cardState), RunMode(mode), RunState(state)
+	if leaseUntil.Valid {
+		run.LeaseUntil = leaseUntil.Time
+	}
+	if failureKind != "" {
+		run.Failure = &RunFailure{Kind: FailureKind(failureKind), Message: failureMessage}
+	}
+	return run, nil
+}
+
+func (s *SQLRunStore) LoadCurrentResult(ctx context.Context, template TemplateID, templateVersion, matchID string, cardState CardState, inputHash string) (Result, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT r.result_version, r.normalized_inputs, r.source_data_window, r.sample_size,
+  r.fallbacks, r.result_data, r.generated_at
+FROM current_generation_results c
+JOIN generation_results r ON r.id = c.generation_result_id
+WHERE c.template_id = ? AND c.template_version = ? AND c.match_id = ?
+  AND c.card_state = ? AND c.input_hash = ?`, template, templateVersion, matchID, cardState, inputHash)
+	var result Result
+	var filters, fallbacks, data []byte
+	if err := row.Scan(&result.Version, &filters, &result.Envelope.SourceDataWindow, &result.Envelope.SampleSize, &fallbacks, &data, &result.Envelope.GeneratedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return Result{}, ErrNotFound
+		}
+		return Result{}, fmt.Errorf("load current generation result: %w", err)
+	}
+	if err := json.Unmarshal(filters, &result.Envelope.NormalizedFilters); err != nil {
+		return Result{}, fmt.Errorf("decode normalized filters: %w", err)
+	}
+	if err := json.Unmarshal(fallbacks, &result.Envelope.Fallbacks); err != nil {
+		return Result{}, fmt.Errorf("decode fallbacks: %w", err)
+	}
+	if err := json.Unmarshal(data, &result.Data); err != nil {
+		return Result{}, fmt.Errorf("decode result data: %w", err)
+	}
+	result.Envelope.Template = template
+	result.Envelope.TemplateVersion = templateVersion
+	result.Envelope.ResultVersion = result.Version
+	return result, nil
+}
+
 func priorityFor(mode RunMode) int {
 	if mode == Regeneration {
 		return 1
