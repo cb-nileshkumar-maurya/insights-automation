@@ -21,7 +21,7 @@ func DefaultConfiguration() Configuration {
 	latest := []any{5, 10}
 	window := []any{"since_2024", "career"}
 	return Configuration{Templates: map[TemplateID]Template{
-		H2HRecord:          {ID: H2HRecord, Version: "v1", Required: []string{"team_a", "team_b", "format"}, Allowed: map[string][]any{"team_a": {}, "team_b": {}, "format": formats, "latest_matches": latest, "venue": {}, "context": []any{"home", "away", "neutral"}}, Defaults: map[string]any{"latest_matches": 10}, FreshFor: 15},
+		H2HRecord:          {ID: H2HRecord, Version: "v1", Required: []string{"team_a", "team_b", "format"}, Allowed: map[string][]any{"team_a": {}, "team_b": {}, "format": formats, "latest_matches": latest, "venue": {}}, Defaults: map[string]any{"latest_matches": 10}, FreshFor: 15},
 		TeamForm:           {ID: TeamForm, Version: "v1", Required: []string{"team_a", "team_b", "format"}, Allowed: map[string][]any{"team_a": {}, "team_b": {}, "format": formats, "latest_matches": latest}, Defaults: map[string]any{"latest_matches": 5}, FreshFor: 15},
 		VenueDNA:           {ID: VenueDNA, Version: "v1", Required: []string{"venue", "format"}, Allowed: map[string][]any{"venue": {}, "format": formats, "window": window}, Defaults: map[string]any{"window": "since_2024"}, MinimumSample: 10, FreshFor: 60},
 		PlayerStatsAtVenue: {ID: PlayerStatsAtVenue, Version: "v1", Required: []string{"players", "venue", "format"}, Allowed: map[string][]any{"players": {}, "venue": {}, "format": formats, "window": window}, Defaults: map[string]any{"window": "since_2024"}, MinimumSample: 15, FreshFor: 60},

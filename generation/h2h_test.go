@@ -38,3 +38,11 @@ func TestH2HRecordReportsInsufficientSampleWhenNoComparableMatchExists(t *testin
 		t.Fatalf("run=%#v err=%v", failed, err)
 	}
 }
+
+func TestH2HRecordRejectsRemovedHomeContextFilter(t *testing.T) {
+	module := NewModule(DefaultConfiguration(), NewH2HGenerator(fixedH2HHistory{}), NewMemoryRunStore(), ClockFunc(func() Time { return ParseTime("2026-09-08T10:00:00Z") }))
+	_, err := module.StartRun(context.Background(), StartRequest{Target: CardTarget{Template: H2HRecord}, Inputs: map[string]any{"team_a": "1", "team_b": "2", "format": "t20", "context": "home"}})
+	if err == nil {
+		t.Fatal("home context should not be accepted in V1")
+	}
+}
