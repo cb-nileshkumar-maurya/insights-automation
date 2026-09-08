@@ -24,3 +24,17 @@ func TestH2HRecordShowsAvailableHistoryWhenFewerMatchesExist(t *testing.T) {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 }
+
+func TestH2HRecordReportsInsufficientSampleWhenNoComparableMatchExists(t *testing.T) {
+	now := ParseTime("2026-09-08T10:00:00Z")
+	module := NewModule(DefaultConfiguration(), NewH2HGenerator(fixedH2HHistory{}), NewMemoryRunStore(), ClockFunc(func() Time { return now }))
+	run, err := module.StartRun(context.Background(), StartRequest{Target: CardTarget{Template: H2HRecord}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"team_a": "1", "team_b": "2", "format": "t20"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	module.runAll(context.Background())
+	failed, err := module.GetRun(context.Background(), run.ID)
+	if err != nil || failed.State != Failed || failed.Failure.Kind != SampleFailure {
+		t.Fatalf("run=%#v err=%v", failed, err)
+	}
+}
