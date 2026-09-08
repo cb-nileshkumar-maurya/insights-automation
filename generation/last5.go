@@ -1,6 +1,9 @@
 package generation
 
-import "context"
+import (
+	"context"
+	"database/sql"
+)
 
 type PlayerGame struct {
 	MatchID                                                int
@@ -59,4 +62,56 @@ func formArrow(games []PlayerGame, career PlayerCareerComparison) string {
 		return "down"
 	}
 	return "level"
+}
+
+type MariaDBLast5History struct{ db *sql.DB }
+
+func NewMariaDBLast5History(db *sql.DB) *MariaDBLast5History { return &MariaDBLast5History{db: db} }
+
+func OpenMariaDBLast5GamesGenerator(ctx context.Context) (*Last5GamesGenerator, *sql.DB, error) {
+	db, err := OpenReadReplica(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return NewLast5GamesGenerator(NewMariaDBLast5History(db)), db, nil
+}
+
+func (h *MariaDBLast5History) LastGames(ctx context.Context, players []int, format, latest int) (map[int][]PlayerGame, map[int]PlayerCareerComparison, error) {
+	marks, ids := playerPlaceholders(players)
+	args := append(ids, format, latest)
+	rows, err := h.db.QueryContext(ctx, `WITH ranked AS (SELECT b.playerId, b.matchId, b.runs, b.balls, ROW_NUMBER() OVER (PARTITION BY b.playerId ORDER BY m.startdt DESC) AS position FROM stats_import3_dump_battingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.playerId IN (`+marks+`) AND m.match_type_id = ?) SELECT playerId, matchId, runs, balls FROM ranked WHERE position <= ?`, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	games := map[int][]PlayerGame{}
+	for rows.Next() {
+		var player int
+		var game PlayerGame
+		if err := rows.Scan(&player, &game.MatchID, &game.BattingRuns, &game.BattingBalls); err != nil {
+			return nil, nil, err
+		}
+		games[player] = append(games[player], game)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	careerRows, err := h.db.QueryContext(ctx, `SELECT b.playerId, AVG(b.runs) FROM stats_import3_dump_battingcard_tbl b JOIN krik_match_archive m ON m.id = b.matchId WHERE b.playerId IN (`+marks+`) AND m.match_type_id = ? GROUP BY b.playerId`, append(ids, format)...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer careerRows.Close()
+	careers := map[int]PlayerCareerComparison{}
+	for careerRows.Next() {
+		var player int
+		var average float64
+		if err := careerRows.Scan(&player, &average); err != nil {
+			return nil, nil, err
+		}
+		careers[player] = PlayerCareerComparison{BattingAverage: average}
+	}
+	if err := careerRows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return games, careers, nil
 }
