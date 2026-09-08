@@ -17,10 +17,11 @@ CREATE TABLE generation_runs (
     failure_message TEXT NULL,
     lease_owner VARCHAR(128) NULL,
     lease_until DATETIME(6) NULL,
+    available_at DATETIME(6) NOT NULL,
     created_at DATETIME(6) NOT NULL,
     updated_at DATETIME(6) NOT NULL,
     PRIMARY KEY (id),
-    KEY generation_runs_claim (state, priority, created_at),
+    KEY generation_runs_claim (state, available_at, priority, created_at),
     KEY generation_runs_active (template_id, template_version, match_id, card_state, input_hash, state),
     KEY generation_runs_parent (parent_id),
     CONSTRAINT generation_runs_target CHECK ((template_id IS NULL) <> (card_set_id IS NULL))

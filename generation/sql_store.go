@@ -34,8 +34,8 @@ func (s *SQLRunStore) SaveRun(ctx context.Context, run Run, templateVersion stri
 INSERT INTO generation_runs (
   id, parent_id, template_id, card_set_id, template_version, match_id, card_state,
   normalized_inputs, input_hash, mode, state, attempt, priority, result_version,
-  failure_kind, failure_message, lease_until, created_at, updated_at
-) VALUES (?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?, NULLIF(?, '0000-00-00 00:00:00'), ?, ?)
+  failure_kind, failure_message, lease_until, available_at, created_at, updated_at
+) VALUES (?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?, NULLIF(?, '0000-00-00 00:00:00'), ?, ?, ?)
 ON DUPLICATE KEY UPDATE
   state = VALUES(state), attempt = VALUES(attempt), result_version = VALUES(result_version),
   failure_kind = VALUES(failure_kind), failure_message = VALUES(failure_message),
@@ -43,7 +43,7 @@ ON DUPLICATE KEY UPDATE
 		run.ID, run.ParentID, run.Target.Template, run.Target.CardSet, templateVersion,
 		run.MatchID, run.CardState, inputs, inputHash, run.Mode, run.State, run.Attempt,
 		priorityFor(run.Mode), run.ResultVersion, failureKind, failureMessage, nullableTime(run.LeaseUntil),
-		run.CreatedAt, time.Now().UTC())
+		run.CreatedAt, run.CreatedAt, time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("save generation run: %w", err)
 	}
@@ -91,6 +91,14 @@ ON DUPLICATE KEY UPDATE generation_result_id = VALUES(generation_result_id), upd
 		run.Target.Template, templateVersion, run.MatchID, run.CardState, inputHash, resultID, time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("update current generation result: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+UPDATE generation_runs
+SET state = 'succeeded', result_version = ?, lease_owner = NULL, lease_until = NULL,
+  updated_at = ?
+WHERE id = ?`, result.Version, time.Now().UTC(), run.ID)
+	if err != nil {
+		return fmt.Errorf("complete generation run: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit generation result: %w", err)
@@ -170,9 +178,9 @@ func (s *SQLRunStore) ClaimNext(ctx context.Context, workerID string, now time.T
 	var id string
 	err = tx.QueryRowContext(ctx, `
 SELECT id FROM generation_runs
-WHERE state = 'queued' AND template_id IS NOT NULL
+WHERE state = 'queued' AND available_at <= ? AND template_id IS NOT NULL
 ORDER BY priority DESC, created_at ASC
-LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&id)
+	LIMIT 1 FOR UPDATE SKIP LOCKED`, now).Scan(&id)
 	if err == sql.ErrNoRows {
 		return Run{}, false, nil
 	}
@@ -224,6 +232,30 @@ WHERE state = 'running' AND lease_until < ?`, now, now)
 		return 0, fmt.Errorf("read recovered lease count: %w", err)
 	}
 	return count, nil
+}
+
+func (s *SQLRunStore) Requeue(ctx context.Context, runID string, attempt int, availableAt time.Time, failure *RunFailure) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE generation_runs
+SET state = 'queued', attempt = ?, failure_kind = ?, failure_message = ?,
+  lease_owner = NULL, lease_until = NULL, available_at = ?, updated_at = ?
+WHERE id = ?`, attempt, failure.Kind, failure.Message, availableAt, time.Now().UTC(), runID)
+	if err != nil {
+		return fmt.Errorf("requeue generation run: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLRunStore) Fail(ctx context.Context, runID string, failure *RunFailure) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE generation_runs
+SET state = 'failed', failure_kind = ?, failure_message = ?,
+  lease_owner = NULL, lease_until = NULL, updated_at = ?
+WHERE id = ?`, failure.Kind, failure.Message, time.Now().UTC(), runID)
+	if err != nil {
+		return fmt.Errorf("fail generation run: %w", err)
+	}
+	return nil
 }
 
 func priorityFor(mode RunMode) int {
