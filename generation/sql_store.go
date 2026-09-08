@@ -11,14 +11,30 @@ import (
 // SQLRunStore owns the project's write database. The application supplies a
 // MariaDB-compatible sql.DB configured with write credentials.
 type SQLRunStore struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect DatabaseDialect
 }
 
 func NewSQLRunStore(db *sql.DB) (*SQLRunStore, error) {
+	return NewSQLRunStoreWithDialect(db, MariaDB)
+}
+
+func NewSQLRunStoreWithDialect(db *sql.DB, dialect DatabaseDialect) (*SQLRunStore, error) {
 	if db == nil {
 		return nil, fmt.Errorf("write database is required")
 	}
-	return &SQLRunStore{db: db}, nil
+	return &SQLRunStore{db: db, dialect: dialect}, nil
+}
+
+func (s *SQLRunStore) Migrate(ctx context.Context) error {
+	if s.dialect != SQLite {
+		return fmt.Errorf("automatic migration is only configured for SQLite")
+	}
+	_, err := s.db.ExecContext(ctx, sqliteSchema)
+	if err != nil {
+		return fmt.Errorf("migrate SQLite write database: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLRunStore) SaveRun(ctx context.Context, run Run, templateVersion string, inputHash string) error {
@@ -29,6 +45,26 @@ func (s *SQLRunStore) SaveRun(ctx context.Context, run Run, templateVersion stri
 	var failureKind, failureMessage any
 	if run.Failure != nil {
 		failureKind, failureMessage = run.Failure.Kind, run.Failure.Message
+	}
+	if s.dialect == SQLite {
+		_, err = s.db.ExecContext(ctx, `
+INSERT INTO generation_runs (
+ id, parent_id, template_id, card_set_id, template_version, match_id, card_state,
+ normalized_inputs, input_hash, mode, state, attempt, priority, result_version,
+ failure_kind, failure_message, lease_until, available_at, created_at, updated_at
+) VALUES (?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+ state = excluded.state, attempt = excluded.attempt, result_version = excluded.result_version,
+ failure_kind = excluded.failure_kind, failure_message = excluded.failure_message,
+ lease_until = excluded.lease_until, updated_at = excluded.updated_at`,
+			run.ID, run.ParentID, run.Target.Template, run.Target.CardSet, templateVersion,
+			run.MatchID, run.CardState, inputs, inputHash, run.Mode, run.State, run.Attempt,
+			priorityFor(run.Mode), run.ResultVersion, failureKind, failureMessage, nullableTime(run.LeaseUntil),
+			run.CreatedAt, run.CreatedAt, time.Now().UTC())
+		if err != nil {
+			return fmt.Errorf("save generation run: %w", err)
+		}
+		return nil
 	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO generation_runs (
@@ -83,11 +119,20 @@ INSERT INTO generation_results (
 	if err != nil {
 		return fmt.Errorf("read generation result id: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, `
+	currentResultStatement := `
 INSERT INTO current_generation_results (
   template_id, template_version, match_id, card_state, input_hash, generation_result_id, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?)
-ON DUPLICATE KEY UPDATE generation_result_id = VALUES(generation_result_id), updated_at = VALUES(updated_at)`,
+ON DUPLICATE KEY UPDATE generation_result_id = VALUES(generation_result_id), updated_at = VALUES(updated_at)`
+	if s.dialect == SQLite {
+		currentResultStatement = `
+INSERT INTO current_generation_results (
+  template_id, template_version, match_id, card_state, input_hash, generation_result_id, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(template_id, template_version, match_id, card_state, input_hash)
+DO UPDATE SET generation_result_id = excluded.generation_result_id, updated_at = excluded.updated_at`
+	}
+	_, err = tx.ExecContext(ctx, currentResultStatement,
 		run.Target.Template, templateVersion, run.MatchID, run.CardState, inputHash, resultID, time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("update current generation result: %w", err)
@@ -191,11 +236,18 @@ func (s *SQLRunStore) ClaimNext(ctx context.Context, workerID string, now time.T
 	}
 	defer tx.Rollback()
 	var id string
-	err = tx.QueryRowContext(ctx, `
+	claimStatement := `
 SELECT id FROM generation_runs
 WHERE state = 'queued' AND available_at <= ? AND template_id IS NOT NULL
 ORDER BY priority DESC, created_at ASC
-	LIMIT 1 FOR UPDATE SKIP LOCKED`, now).Scan(&id)
+LIMIT 1 FOR UPDATE SKIP LOCKED`
+	if s.dialect == SQLite {
+		claimStatement = `
+SELECT id FROM generation_runs
+WHERE state = 'queued' AND available_at <= ? AND template_id IS NOT NULL
+ORDER BY priority DESC, created_at ASC LIMIT 1`
+	}
+	err = tx.QueryRowContext(ctx, claimStatement, now).Scan(&id)
 	if err == sql.ErrNoRows {
 		return Run{}, false, nil
 	}
