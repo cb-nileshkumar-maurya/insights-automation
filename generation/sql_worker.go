@@ -67,7 +67,7 @@ func (w *SQLWorker) ProcessOne(ctx context.Context) (bool, error) {
 	if err := w.store.SaveResult(ctx, run, template.Version, hash, result); err != nil {
 		return true, w.finishFailure(ctx, run, hash, &RunFailure{Kind: TransientFailure, Message: err.Error()})
 	}
-	return true, nil
+	return true, w.store.RefreshParentStatus(ctx, run.ParentID)
 }
 
 func (w *SQLWorker) heartbeat(ctx context.Context, runID string) func() {
@@ -94,7 +94,10 @@ func (w *SQLWorker) finishFailure(ctx context.Context, run Run, inputHash string
 	if failure.Kind == TransientFailure && run.Attempt < 2 {
 		return w.store.Requeue(ctx, run.ID, run.Attempt+1, w.now().Add(retryDelay(run.Attempt)), failure)
 	}
-	return w.store.Fail(ctx, run.ID, failure)
+	if err := w.store.Fail(ctx, run.ID, failure); err != nil {
+		return err
+	}
+	return w.store.RefreshParentStatus(ctx, run.ParentID)
 }
 
 func retryDelay(attempt int) time.Duration { return time.Second << attempt }

@@ -133,6 +133,21 @@ FROM generation_runs WHERE id = ?`, id)
 	if failureKind != "" {
 		run.Failure = &RunFailure{Kind: FailureKind(failureKind), Message: failureMessage}
 	}
+	children, err := s.db.QueryContext(ctx, `SELECT id FROM generation_runs WHERE parent_id = ? ORDER BY created_at`, run.ID)
+	if err != nil {
+		return Run{}, fmt.Errorf("load child generation runs: %w", err)
+	}
+	defer children.Close()
+	for children.Next() {
+		var childID string
+		if err := children.Scan(&childID); err != nil {
+			return Run{}, fmt.Errorf("scan child generation run: %w", err)
+		}
+		run.Children = append(run.Children, childID)
+	}
+	if err := children.Err(); err != nil {
+		return Run{}, fmt.Errorf("iterate child generation runs: %w", err)
+	}
 	return run, nil
 }
 
@@ -254,6 +269,33 @@ SET state = 'failed', failure_kind = ?, failure_message = ?,
 WHERE id = ?`, failure.Kind, failure.Message, time.Now().UTC(), runID)
 	if err != nil {
 		return fmt.Errorf("fail generation run: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLRunStore) RefreshParentStatus(ctx context.Context, parentID string) error {
+	if parentID == "" {
+		return nil
+	}
+	var total, succeeded, failed int
+	err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*), SUM(state = 'succeeded'), SUM(state = 'failed')
+FROM generation_runs WHERE parent_id = ?`, parentID).Scan(&total, &succeeded, &failed)
+	if err != nil {
+		return fmt.Errorf("count child generation runs: %w", err)
+	}
+	if total == 0 || succeeded+failed != total {
+		return nil
+	}
+	state := Succeeded
+	if failed == total {
+		state = Failed
+	} else if failed > 0 {
+		state = CompletedWithErrors
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE generation_runs SET state = ?, updated_at = ? WHERE id = ?`, state, time.Now().UTC(), parentID)
+	if err != nil {
+		return fmt.Errorf("update parent generation run: %w", err)
 	}
 	return nil
 }
