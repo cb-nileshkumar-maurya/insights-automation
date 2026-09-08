@@ -2,6 +2,7 @@ package generation
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 )
 
@@ -66,4 +67,42 @@ func (g *VenueDNAGenerator) Generate(ctx context.Context, query GenerationQuery)
 	}
 	data := map[string]any{"average_first_innings_score": float64(firstTotal) / float64(len(matches)), "bat_first_win_rate": float64(batFirstWins) * 100 / float64(len(matches)), "chase_win_rate": float64(chaseWins) * 100 / float64(len(matches)), "high_total": high, "low_total": low, "match_phase_benchmarks": map[string]any{}}
 	return GeneratedData{Data: data, SampleSize: len(matches), Fallbacks: fallbacks, SourceDataWindow: fmt.Sprintf("%s window", window)}
+}
+
+type MariaDBVenueHistory struct{ db *sql.DB }
+
+func NewMariaDBVenueHistory(db *sql.DB) *MariaDBVenueHistory { return &MariaDBVenueHistory{db: db} }
+func OpenMariaDBVenueDNAGenerator(ctx context.Context) (*VenueDNAGenerator, *sql.DB, error) {
+	db, err := OpenReadReplica(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return NewVenueDNAGenerator(NewMariaDBVenueHistory(db)), db, nil
+}
+func (h *MariaDBVenueHistory) VenueMatches(ctx context.Context, venue, format int, window string) ([]VenueMatch, error) {
+	return h.find(ctx, `m.venueid = ?`, []any{venue}, format, window)
+}
+func (h *MariaDBVenueHistory) CountryMatches(ctx context.Context, venue, format int, window string) ([]VenueMatch, error) {
+	return h.find(ctx, `m.venueid IN (SELECT id FROM krik_match_venue WHERE country_id = (SELECT country_id FROM krik_match_venue WHERE id = ?))`, []any{venue}, format, window)
+}
+func (h *MariaDBVenueHistory) find(ctx context.Context, population string, args []any, format int, window string) ([]VenueMatch, error) {
+	dateClause := ""
+	if window == "since_2024" {
+		dateClause = " AND m.startdt >= '2024-01-01'"
+	}
+	args = append(args, format)
+	rows, err := h.db.QueryContext(ctx, `SELECT i.runs, i.battingTeamId, COALESCE(m.winner, 0) FROM krik_match_archive m JOIN stats_import3_dump_innings_tbl i ON i.matchId = m.id AND i.inningsId = 1 WHERE `+population+` AND m.match_type_id = ? AND m.isArchived = 1`+dateClause, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	matches := []VenueMatch{}
+	for rows.Next() {
+		var match VenueMatch
+		if err := rows.Scan(&match.FirstInningsScore, &match.FirstInningsTeam, &match.Winner); err != nil {
+			return nil, err
+		}
+		matches = append(matches, match)
+	}
+	return matches, rows.Err()
 }
