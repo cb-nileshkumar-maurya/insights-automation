@@ -1,8 +1,10 @@
-package generation
+package tests
 
 import (
 	"context"
 	"testing"
+
+	. "github.com/cricbuzz/insights-automation/generation"
 )
 
 type fixedPlayerVenueHistory struct{ batting, bowling, careerBatting, careerBowling map[int]PlayerVenueDiscipline }
@@ -22,7 +24,7 @@ func TestPlayerVenueStatsFallsBackPerDiscipline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	result, err := module.GetCurrentResult(context.Background(), PlayerStatsAtVenue, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil || len(result.Envelope.Fallbacks) != 2 {
 		t.Fatalf("result=%#v err=%v", result, err)

@@ -27,8 +27,30 @@ type SQLWorker struct {
 	deadline time.Duration
 }
 
+// SQLWorkerOptions supplies host-controlled timing and concurrency settings.
+// Zero values preserve the production defaults.
+type SQLWorkerOptions struct {
+	Slots    chan struct{}
+	Now      func() time.Time
+	Deadline time.Duration
+}
+
 func NewSQLWorker(store *SQLRunStore, data CricketData, config Configuration, workerID string) *SQLWorker {
-	return &SQLWorker{store: store, data: data, config: config, workerID: workerID, slots: sqlWorkerSlots, now: func() time.Time { return time.Now().UTC() }, deadline: executionDeadline}
+	return NewSQLWorkerWithOptions(store, data, config, workerID, SQLWorkerOptions{})
+}
+
+func NewSQLWorkerWithOptions(store *SQLRunStore, data CricketData, config Configuration, workerID string, options SQLWorkerOptions) *SQLWorker {
+	slots, now, deadline := options.Slots, options.Now, options.Deadline
+	if slots == nil {
+		slots = sqlWorkerSlots
+	}
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
+	if deadline == 0 {
+		deadline = executionDeadline
+	}
+	return &SQLWorker{store: store, data: data, config: config, workerID: workerID, slots: slots, now: now, deadline: deadline}
 }
 
 // ProcessOne claims and processes at most one child run. A caller may invoke it

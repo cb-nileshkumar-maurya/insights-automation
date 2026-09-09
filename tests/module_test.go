@@ -1,9 +1,11 @@
-package generation
+package tests
 
 import (
 	"context"
 	"errors"
 	"testing"
+
+	. "github.com/cricbuzz/insights-automation/generation"
 )
 
 func TestNormalRequestRunsTemplateAndMakesCurrentResultAvailable(t *testing.T) {
@@ -19,7 +21,7 @@ func TestNormalRequestRunsTemplateAndMakesCurrentResultAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 
 	got, err := module.GetCurrentResult(context.Background(), H2HRecord, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil {
@@ -43,7 +45,7 @@ func TestNormalRequestsJoinWorkAndRegenerationCreatesANewVersion(t *testing.T) {
 	if err != nil || joined.ID != first.ID {
 		t.Fatalf("normal request did not join work: %#v, %v", joined, err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	request.Mode = Regeneration
 	if _, err := module.StartRun(context.Background(), request); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("scheduler regeneration error = %v", err)
@@ -54,7 +56,7 @@ func TestNormalRequestsJoinWorkAndRegenerationCreatesANewVersion(t *testing.T) {
 		t.Fatalf("editor regeneration = %#v, %v", second, err)
 	}
 	data.Responses[H2HRecord] = GeneratedData{Data: map[string]any{"wins": 2}, SampleSize: 2}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	result, err := module.GetCurrentResult(context.Background(), H2HRecord, "m-1", PreToss, first.NormalizedInputs)
 	if err != nil || result.Version != 2 {
 		t.Fatalf("current version = %#v, %v", result, err)
@@ -66,11 +68,11 @@ func TestFailedRegenerationKeepsPreviousCurrentResult(t *testing.T) {
 	module := NewModule(DefaultConfiguration(), data, NewMemoryRunStore(), ClockFunc(func() Time { return ParseTime("2026-09-08T10:00:00Z") }))
 	request := StartRequest{Target: CardTarget{Template: H2HRecord}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"team_a": "india", "team_b": "australia", "format": "t20"}, Caller: Caller{Role: Editor}}
 	first, _ := module.StartRun(context.Background(), request)
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	request.Mode = Regeneration
 	failure, _ := module.StartRun(context.Background(), request)
 	data.Responses[H2HRecord] = GeneratedData{Err: &RunFailure{Kind: TransientFailure, Message: "replica unavailable"}}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	run, _ := module.GetRun(context.Background(), failure.ID)
 	current, err := module.GetCurrentResult(context.Background(), H2HRecord, "m-1", PreToss, first.NormalizedInputs)
 	if run.State != Failed || err != nil || current.Version != 1 {
@@ -95,7 +97,7 @@ func TestCardSetKeepsSuccessfulChildCurrentWhenAnotherChildFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	completed, _ := module.GetRun(context.Background(), parent.ID)
 	result, err := module.GetCurrentResult(context.Background(), H2HRecord, "m-1", PreToss, map[string]any{"team_a": "india", "team_b": "australia", "venue": "wankhede", "format": "t20", "latest_matches": 10})
 	if completed.State != CompletedWithErrors || len(completed.Children) != 6 || err != nil || result.Version != 1 {
@@ -114,13 +116,13 @@ func TestNormalCardSetDoesNotRecomputeCurrentChildren(t *testing.T) {
 	if _, err := module.StartRun(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	queries := len(data.Queries)
 	second, err := module.StartRun(context.Background(), request)
 	if err != nil || second.State != Succeeded || len(second.Children) != 0 {
 		t.Fatalf("second card-set run = %#v, %v", second, err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	if len(data.Queries) != queries {
 		t.Fatalf("current card set ran %d extra queries", len(data.Queries)-queries)
 	}
@@ -133,7 +135,7 @@ func TestStaleResultsAreRetainedButNotReturnedAsCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	now = now.Add(16 * 60 * 1e9)
 	if _, err := module.GetCurrentResult(context.Background(), TeamForm, "m-1", PreToss, run.NormalizedInputs); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("stale result error = %v", err)

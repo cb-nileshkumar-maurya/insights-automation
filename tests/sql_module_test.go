@@ -1,9 +1,11 @@
-package generation
+package tests
 
 import (
 	"context"
 	"path/filepath"
 	"testing"
+
+	. "github.com/cricbuzz/insights-automation/generation"
 )
 
 func TestSQLModuleKeepsCurrentResultAfterModuleRestart(t *testing.T) {
@@ -12,7 +14,7 @@ func TestSQLModuleKeepsCurrentResultAfterModuleRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.db.Close()
+	defer store.Close()
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +61,7 @@ func TestSQLModulePersistsCompletedCardSetStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.db.Close()
+	defer store.Close()
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +94,7 @@ func TestSQLModuleReconciliationJoinsActiveCardSetAndSkipsHealthyWrites(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.db.Close()
+	defer store.Close()
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}

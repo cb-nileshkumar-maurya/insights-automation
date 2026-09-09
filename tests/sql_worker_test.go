@@ -1,10 +1,12 @@
-package generation
+package tests
 
 import (
 	"context"
 	"path/filepath"
 	"testing"
 	"time"
+
+	. "github.com/cricbuzz/insights-automation/generation"
 )
 
 func openWorkerTestStore(t *testing.T) *SQLRunStore {
@@ -13,7 +15,7 @@ func openWorkerTestStore(t *testing.T) *SQLRunStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.db.Close() })
+	t.Cleanup(func() { store.Close() })
 	if err := store.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -31,13 +33,12 @@ func TestSQLWorkerRetriesTransientFailureThenFailsPermanently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker := NewSQLWorker(store, &ScriptedCricketData{Responses: map[TemplateID]GeneratedData{H2HRecord: {Err: &RunFailure{Kind: TransientFailure, Message: "replica unavailable"}}}}, DefaultConfiguration(), "worker")
-	worker.now = func() time.Time { return now }
+	worker := NewSQLWorkerWithOptions(store, &ScriptedCricketData{Responses: map[TemplateID]GeneratedData{H2HRecord: {Err: &RunFailure{Kind: TransientFailure, Message: "replica unavailable"}}}}, DefaultConfiguration(), "worker", SQLWorkerOptions{Now: func() time.Time { return now }})
 	for attempt := 0; attempt < 2; attempt++ {
 		if claimed, err := worker.ProcessOne(ctx); err != nil || !claimed {
 			t.Fatalf("attempt %d claimed=%v err=%v", attempt, claimed, err)
 		}
-		now = now.Add(retryDelay(attempt))
+		now = now.Add(time.Second << attempt)
 	}
 	if claimed, err := worker.ProcessOne(ctx); err != nil || !claimed {
 		t.Fatalf("final claimed=%v err=%v", claimed, err)
@@ -103,8 +104,7 @@ func TestSQLWorkerRequeuesDeadlineFailureAndHonorsWorkerLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker := NewSQLWorker(store, deadlineData{}, DefaultConfiguration(), "worker")
-	worker.now, worker.deadline = func() time.Time { return now }, time.Millisecond
+	worker := NewSQLWorkerWithOptions(store, deadlineData{}, DefaultConfiguration(), "worker", SQLWorkerOptions{Now: func() time.Time { return now }, Deadline: time.Millisecond})
 	if claimed, err := worker.ProcessOne(ctx); err != nil || !claimed {
 		t.Fatalf("deadline claimed=%v err=%v", claimed, err)
 	}
@@ -112,9 +112,9 @@ func TestSQLWorkerRequeuesDeadlineFailureAndHonorsWorkerLimit(t *testing.T) {
 	if requeued.State != Queued || requeued.Attempt != 1 || requeued.Failure.Kind != TransientFailure {
 		t.Fatalf("requeued=%#v", requeued)
 	}
-	limited := NewSQLWorker(store, deadlineData{}, DefaultConfiguration(), "limited")
-	limited.slots = make(chan struct{}, 1)
-	limited.slots <- struct{}{}
+	limitedSlots := make(chan struct{}, 1)
+	limitedSlots <- struct{}{}
+	limited := NewSQLWorkerWithOptions(store, deadlineData{}, DefaultConfiguration(), "limited", SQLWorkerOptions{Slots: limitedSlots})
 	if claimed, err := limited.ProcessOne(ctx); err != nil || claimed {
 		t.Fatalf("limited claimed=%v err=%v", claimed, err)
 	}

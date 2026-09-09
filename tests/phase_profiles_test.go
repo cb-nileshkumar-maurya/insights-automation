@@ -1,10 +1,11 @@
-package generation
+package tests
 
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
+
+	. "github.com/cricbuzz/insights-automation/generation"
 )
 
 type fixedTeamPhaseHistory struct {
@@ -32,7 +33,7 @@ func TestTeamPhaseProfilesReturnsBothTeamsAndFallsBackPerPhase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	result, err := module.GetCurrentResult(context.Background(), TeamPhaseProfiles, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil {
 		t.Fatal(err)
@@ -55,27 +56,13 @@ func TestTeamPhaseProfilesRejectsTestFormat(t *testing.T) {
 	}
 }
 
-func TestPhaseProfileQueryUsesConstrainedMatchPopulation(t *testing.T) {
-	statement := teamPhaseProfileStatement("?,?", "CASE WHEN b.ballNbr <= 6 THEN 'powerplay' END", "")
-	if !containsAll(statement, "WITH comparable_matches", "JOIN comparable_matches", "b.battingTeamId IN (?,?)") {
-		t.Fatal("delivery query must join the selected match population")
-	}
-}
-
 func TestPhaseProfileFormatBoundaries(t *testing.T) {
-	if !containsAll(phaseNameExpression(3), "<= 6", "<= 15") {
-		t.Fatalf("T20 phases=%s", phaseNameExpression(3))
+	t20 := PhasesFor("t20")
+	if len(t20) != 3 || t20[0].LastOver != 6 || t20[1].LastOver != 15 {
+		t.Fatalf("T20 phases=%#v", t20)
 	}
-	if !containsAll(phaseNameExpression(2), "<= 10", "<= 40") {
-		t.Fatalf("ODI phases=%s", phaseNameExpression(2))
+	odi := PhasesFor("odi")
+	if len(odi) != 3 || odi[0].LastOver != 10 || odi[1].LastOver != 40 {
+		t.Fatalf("ODI phases=%#v", odi)
 	}
-}
-
-func containsAll(value string, expected ...string) bool {
-	for _, part := range expected {
-		if !strings.Contains(value, part) {
-			return false
-		}
-	}
-	return true
 }

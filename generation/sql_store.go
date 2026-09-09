@@ -26,6 +26,8 @@ func NewSQLRunStoreWithDialect(db *sql.DB, dialect DatabaseDialect) (*SQLRunStor
 	return &SQLRunStore{db: db, dialect: dialect}, nil
 }
 
+func (s *SQLRunStore) Close() error { return s.db.Close() }
+
 func (s *SQLRunStore) Migrate(ctx context.Context) error {
 	if s.dialect != SQLite {
 		return fmt.Errorf("automatic migration is only configured for SQLite")

@@ -1,8 +1,10 @@
-package generation
+package tests
 
 import (
 	"context"
 	"testing"
+
+	. "github.com/cricbuzz/insights-automation/generation"
 )
 
 type fixedTeamFormHistory map[int][]TeamFormMatch
@@ -18,7 +20,7 @@ func TestTeamFormShowsAvailableHistoryForEachTeam(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	result, err := module.GetCurrentResult(context.Background(), TeamForm, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil || result.Envelope.SampleSize != 2 || result.Envelope.Fallbacks[0] != "available_history" {
 		t.Fatalf("result=%#v err=%v", result, err)
@@ -32,7 +34,7 @@ func TestTeamFormReportsInsufficientSampleWhenNeitherTeamHasHistory(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	failed, _ := module.GetRun(context.Background(), run.ID)
 	if failed.State != Failed || failed.Failure.Kind != SampleFailure {
 		t.Fatalf("run=%#v", failed)

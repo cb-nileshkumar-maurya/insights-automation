@@ -1,8 +1,10 @@
-package generation
+package tests
 
 import (
 	"context"
 	"testing"
+
+	. "github.com/cricbuzz/insights-automation/generation"
 )
 
 type fixedLast5History struct{}
@@ -18,7 +20,7 @@ func TestLast5GamesReturnsOneEntryPerPlayerFromABatchedPopulation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	result, err := module.GetCurrentResult(context.Background(), Last5Games, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +39,7 @@ func TestLast5GamesMarksShortAndMissingPlayerHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	result, err := module.GetCurrentResult(context.Background(), Last5Games, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil || result.Envelope.Fallbacks[0] != "player_available_history" {
 		t.Fatalf("result=%#v err=%v", result, err)

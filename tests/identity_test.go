@@ -1,6 +1,10 @@
-package generation
+package tests
 
-import "testing"
+import (
+	"testing"
+
+	. "github.com/cricbuzz/insights-automation/generation"
+)
 
 func TestInputHashIsStableAcrossFilterOrderAndChangesWithMatchContext(t *testing.T) {
 	first, err := InputHash(H2HRecord, "v1", "m-1", PreToss, map[string]any{"format": "t20", "team_a": "india", "team_b": "australia"})

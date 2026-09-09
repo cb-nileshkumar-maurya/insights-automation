@@ -1,8 +1,10 @@
-package generation
+package tests
 
 import (
 	"context"
 	"testing"
+
+	. "github.com/cricbuzz/insights-automation/generation"
 )
 
 type staticEligibleMatches []EligibleMatch

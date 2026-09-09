@@ -1,8 +1,10 @@
-package generation
+package tests
 
 import (
 	"context"
 	"testing"
+
+	. "github.com/cricbuzz/insights-automation/generation"
 )
 
 type fixedH2HHistory []H2HMatchRecord
@@ -18,7 +20,7 @@ func TestH2HRecordShowsAvailableHistoryWhenFewerMatchesExist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	result, err := module.GetCurrentResult(context.Background(), H2HRecord, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil || result.Envelope.SampleSize != 2 || result.Envelope.Fallbacks[0] != "available_history" || result.Data["wins"] != 1 {
 		t.Fatalf("result=%#v err=%v", result, err)
@@ -32,7 +34,7 @@ func TestH2HRecordReportsInsufficientSampleWhenNoComparableMatchExists(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	failed, err := module.GetRun(context.Background(), run.ID)
 	if err != nil || failed.State != Failed || failed.Failure.Kind != SampleFailure {
 		t.Fatalf("run=%#v err=%v", failed, err)

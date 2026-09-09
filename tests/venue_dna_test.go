@@ -1,8 +1,10 @@
-package generation
+package tests
 
 import (
 	"context"
 	"testing"
+
+	. "github.com/cricbuzz/insights-automation/generation"
 )
 
 type fixedVenueHistory struct {
@@ -31,7 +33,7 @@ func TestVenueDNAUsesVisibleCountryFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	result, err := module.GetCurrentResult(context.Background(), VenueDNA, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil || result.Envelope.SampleSize != 10 || result.Envelope.Fallbacks[0] != "country_level" {
 		t.Fatalf("result=%#v err=%v", result, err)
@@ -46,7 +48,7 @@ func TestVenueDNAFailsWithoutViableFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module.runAll(context.Background())
+	module.ProcessAll(context.Background())
 	failed, _ := module.GetRun(context.Background(), run.ID)
 	if failed.State != Failed || failed.Failure.Kind != SampleFailure {
 		t.Fatalf("run=%#v", failed)

@@ -109,6 +109,10 @@ func (m *Module) runAll(ctx context.Context) {
 	}
 }
 
+// ProcessAll is the deterministic in-memory processing seam used by local
+// integration tests. Production work is consumed by SQLWorker.
+func (m *Module) ProcessAll(ctx context.Context) { m.runAll(ctx) }
+
 // RecoverExpiredLeases returns abandoned child work to the durable queue.
 func (m *Module) recoverExpiredLeases() int {
 	m.store.mu.Lock()
