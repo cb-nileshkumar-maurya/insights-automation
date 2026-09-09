@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -53,7 +54,11 @@ func main() {
 }
 
 func runtimeConfig(ctx context.Context) (app.Config, interface{ Close() error }, error) {
-	if mode() != "production" {
+	runtimeMode := mode()
+	if runtimeMode != "local" && runtimeMode != "production" {
+		return app.Config{}, nil, errors.New("INSIGHTS_AUTOMATION_MODE must be local or production")
+	}
+	if runtimeMode == "local" {
 		path := envOr("INSIGHTS_AUTOMATION_SQLITE_PATH", filepath.Join("data", "insights-automation.db"))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return app.Config{}, nil, err
@@ -76,7 +81,12 @@ func runtimeConfig(ctx context.Context) (app.Config, interface{ Close() error },
 		generation.Last5Games:         generation.NewLast5GamesGenerator(generation.NewMariaDBLast5History(replica)),
 		generation.TeamPhaseProfiles:  generation.NewTeamPhaseProfilesGenerator(generation.NewMariaDBTeamPhaseHistory(replica)),
 	})
-	return app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.MariaDB, DSN: writeDSN}, Data: data}, replica, nil
+	resolver, err := productionRoleResolver()
+	if err != nil {
+		replica.Close()
+		return app.Config{}, nil, err
+	}
+	return app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.MariaDB, DSN: writeDSN}, Data: data, RoleResolver: resolver, Ready: replica.PingContext}, replica, nil
 }
 
 func mode() string { return envOr("INSIGHTS_AUTOMATION_MODE", "local") }
@@ -85,4 +95,31 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func productionRoleResolver() (app.RoleResolver, error) {
+	tokens := map[string]generation.Role{}
+	for _, configured := range []struct {
+		name string
+		role generation.Role
+	}{{"INSIGHTS_AUTOMATION_SCHEDULER_TOKEN", generation.Scheduler}, {"INSIGHTS_AUTOMATION_EDITOR_TOKEN", generation.Editor}, {"INSIGHTS_AUTOMATION_OPERATIONS_TOKEN", generation.Operations}} {
+		if token := os.Getenv(configured.name); token != "" {
+			tokens[token] = configured.role
+		}
+	}
+	if len(tokens) == 0 {
+		return nil, errors.New("at least one INSIGHTS_AUTOMATION_*_TOKEN must be set in production mode")
+	}
+	return func(request *http.Request) (generation.Role, error) {
+		token := request.Header.Get("Authorization")
+		const prefix = "Bearer "
+		if !strings.HasPrefix(token, prefix) {
+			return "", errors.New("missing bearer token")
+		}
+		role, ok := tokens[strings.TrimPrefix(token, prefix)]
+		if !ok {
+			return "", errors.New("invalid bearer token")
+		}
+		return role, nil
+	}, nil
 }

@@ -17,17 +17,25 @@ type Config struct {
 	WriteDatabase generation.DatabaseConfig
 	Data          generation.CricketData
 	Eligible      generation.EligibleMatchSource
+	RoleResolver  RoleResolver
 	WorkerPoll    time.Duration
 	WorkerID      string
+	Ready         func(context.Context) error
 }
 
 type Service struct {
-	store      *generation.SQLRunStore
-	module     *generation.SQLModule
-	worker     *generation.SQLWorker
-	reconciler *generation.Reconciler
-	workerPoll time.Duration
+	store        *generation.SQLRunStore
+	module       *generation.SQLModule
+	worker       *generation.SQLWorker
+	reconciler   *generation.Reconciler
+	workerPoll   time.Duration
+	roleResolver RoleResolver
+	ready        func(context.Context) error
 }
+
+// RoleResolver is the command's authentication boundary. Production callers
+// receive a role from an authenticated adapter, never from request JSON.
+type RoleResolver func(*http.Request) (generation.Role, error)
 
 func New(ctx context.Context, config Config) (*Service, error) {
 	store, err := generation.OpenSQLRunStore(ctx, config.WriteDatabase)
@@ -49,11 +57,17 @@ func New(ctx context.Context, config Config) (*Service, error) {
 	if config.WorkerID == "" {
 		config.WorkerID = "insights-automation"
 	}
+	if config.RoleResolver == nil {
+		config.RoleResolver = localRole
+	}
 	module := generation.NewSQLModule(generation.DefaultConfiguration(), store, generation.ClockFunc(func() time.Time { return time.Now().UTC() }))
 	if config.Eligible == nil {
 		config.Eligible = emptyEligibleMatches{}
 	}
-	return &Service{store: store, module: module, worker: generation.NewSQLWorker(store, config.Data, generation.DefaultConfiguration(), config.WorkerID), reconciler: generation.NewReconciler(config.Eligible, module, "pre_toss_v1"), workerPoll: config.WorkerPoll}, nil
+	if config.Ready == nil {
+		config.Ready = store.Ping
+	}
+	return &Service{store: store, module: module, worker: generation.NewSQLWorker(store, config.Data, generation.DefaultConfiguration(), config.WorkerID), reconciler: generation.NewReconciler(config.Eligible, module, "pre_toss_v1"), workerPoll: config.WorkerPoll, roleResolver: config.RoleResolver, ready: config.Ready}, nil
 }
 
 func (s *Service) Close() error { return s.store.Close() }
@@ -84,7 +98,11 @@ func (s *Service) Handler() http.Handler {
 	return mux
 }
 
-func (s *Service) health(writer http.ResponseWriter, _ *http.Request) {
+func (s *Service) health(writer http.ResponseWriter, request *http.Request) {
+	if err := s.ready(request.Context()); err != nil {
+		writeError(writer, http.StatusServiceUnavailable, "service is not ready")
+		return
+	}
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "ready"})
 }
 
@@ -93,7 +111,6 @@ type submitRequest struct {
 	MatchID   string                `json:"match_id"`
 	CardState generation.CardState  `json:"card_state"`
 	Inputs    map[string]any        `json:"inputs"`
-	Role      generation.Role       `json:"role"`
 	Mode      generation.RunMode    `json:"mode"`
 }
 
@@ -103,11 +120,12 @@ func (s *Service) submitRun(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, "invalid JSON request")
 		return
 	}
-	if !knownRole(submitted.Role) {
-		writeError(writer, http.StatusForbidden, "unknown caller role")
+	role, err := s.roleResolver(request)
+	if err != nil || !knownRole(role) {
+		writeError(writer, http.StatusForbidden, "caller is not authorized")
 		return
 	}
-	run, err := s.module.StartRun(request.Context(), generation.StartRequest{Target: submitted.Target, MatchID: submitted.MatchID, CardState: submitted.CardState, Inputs: submitted.Inputs, Caller: generation.Caller{Role: submitted.Role}, Mode: submitted.Mode})
+	run, err := s.module.StartRun(request.Context(), generation.StartRequest{Target: submitted.Target, MatchID: submitted.MatchID, CardState: submitted.CardState, Inputs: submitted.Inputs, Caller: generation.Caller{Role: role}, Mode: submitted.Mode})
 	if errors.Is(err, generation.ErrUnauthorized) {
 		writeError(writer, http.StatusForbidden, err.Error())
 		return
@@ -153,6 +171,14 @@ func (s *Service) getCurrentResult(writer http.ResponseWriter, request *http.Req
 
 func knownRole(role generation.Role) bool {
 	return role == generation.Scheduler || role == generation.Editor || role == generation.Operations
+}
+
+func localRole(request *http.Request) (generation.Role, error) {
+	role := generation.Role(request.Header.Get("X-Insights-Role"))
+	if role == "" {
+		role = generation.Editor
+	}
+	return role, nil
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {

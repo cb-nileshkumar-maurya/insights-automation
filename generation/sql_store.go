@@ -28,6 +28,8 @@ func NewSQLRunStoreWithDialect(db *sql.DB, dialect DatabaseDialect) (*SQLRunStor
 
 func (s *SQLRunStore) Close() error { return s.db.Close() }
 
+func (s *SQLRunStore) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+
 func (s *SQLRunStore) Migrate(ctx context.Context) error {
 	if s.dialect != SQLite {
 		return fmt.Errorf("automatic migration is only configured for SQLite")
