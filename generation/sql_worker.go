@@ -24,10 +24,11 @@ type SQLWorker struct {
 	workerID string
 	slots    chan struct{}
 	now      func() time.Time
+	deadline time.Duration
 }
 
 func NewSQLWorker(store *SQLRunStore, data CricketData, config Configuration, workerID string) *SQLWorker {
-	return &SQLWorker{store: store, data: data, config: config, workerID: workerID, slots: sqlWorkerSlots, now: func() time.Time { return time.Now().UTC() }}
+	return &SQLWorker{store: store, data: data, config: config, workerID: workerID, slots: sqlWorkerSlots, now: func() time.Time { return time.Now().UTC() }, deadline: executionDeadline}
 }
 
 // ProcessOne claims and processes at most one child run. A caller may invoke it
@@ -51,7 +52,7 @@ func (w *SQLWorker) ProcessOne(ctx context.Context) (bool, error) {
 	if err != nil {
 		return true, w.finishFailure(ctx, run, "", &RunFailure{Kind: ValidationFailure, Message: err.Error()})
 	}
-	execution, cancel := context.WithTimeout(ctx, executionDeadline)
+	execution, cancel := context.WithTimeout(ctx, w.deadline)
 	stopHeartbeat := w.heartbeat(execution, run.ID)
 	generated := w.data.Generate(execution, GenerationQuery{Template: run.Target.Template, MatchID: run.MatchID, Inputs: canonicalInputs(run.NormalizedInputs)})
 	timedOut := execution.Err() == context.DeadlineExceeded
