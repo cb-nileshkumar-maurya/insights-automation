@@ -51,6 +51,11 @@ func (m *SQLModule) StartRun(ctx context.Context, request StartRequest) (Run, er
 		} else if err != nil && err != ErrNotFound {
 			return Run{}, err
 		}
+		if active, err := m.store.FindActiveRun(ctx, request.Target, request.MatchID, request.CardState, hash); err == nil {
+			return active, nil
+		} else if err != ErrNotFound {
+			return Run{}, err
+		}
 	}
 	run := newSQLRun(request, inputs, "", m.clock.Now())
 	if err := m.store.SaveRun(ctx, run, template.Version, hash); err != nil {
@@ -64,10 +69,24 @@ func (m *SQLModule) startCardSet(ctx context.Context, request StartRequest) (Run
 	if !ok {
 		return Run{}, ErrInvalidRequest
 	}
-	parent := newSQLRun(request, canonicalInputs(request.Inputs), "", m.clock.Now())
-	if err := m.store.SaveRun(ctx, parent, "card-set-v1", ""); err != nil {
+	parentInputs := canonicalInputs(request.Inputs)
+	parentHash, err := InputHash(TemplateID(request.Target.CardSet), "card-set-v1", request.MatchID, request.CardState, parentInputs)
+	if err != nil {
 		return Run{}, err
 	}
+	if request.Mode == Normal {
+		if active, err := m.store.FindActiveRun(ctx, request.Target, request.MatchID, request.CardState, parentHash); err == nil {
+			return active, nil
+		} else if err != ErrNotFound {
+			return Run{}, err
+		}
+	}
+	type childPreparation struct {
+		template Template
+		inputs   map[string]any
+		hash     string
+	}
+	pending := make([]childPreparation, 0, len(templates))
 	for _, id := range templates {
 		template := m.config.Templates[id]
 		inputs, err := validate(template, inputsForTemplate(template, request.Inputs))
@@ -85,10 +104,20 @@ func (m *SQLModule) startCardSet(ctx context.Context, request StartRequest) (Run
 				return Run{}, err
 			}
 		}
+		pending = append(pending, childPreparation{template: template, inputs: inputs, hash: hash})
+	}
+	if len(pending) == 0 {
+		return Run{ID: "current-card-set", Target: request.Target, MatchID: request.MatchID, CardState: request.CardState, NormalizedInputs: parentInputs, State: Succeeded}, nil
+	}
+	parent := newSQLRun(request, parentInputs, "", m.clock.Now())
+	if err := m.store.SaveRun(ctx, parent, "card-set-v1", parentHash); err != nil {
+		return Run{}, err
+	}
+	for _, prepared := range pending {
 		childRequest := request
-		childRequest.Target = CardTarget{Template: id}
-		child := newSQLRun(childRequest, inputs, parent.ID, m.clock.Now())
-		if err := m.store.SaveRun(ctx, child, template.Version, hash); err != nil {
+		childRequest.Target = CardTarget{Template: prepared.template.ID}
+		child := newSQLRun(childRequest, prepared.inputs, parent.ID, m.clock.Now())
+		if err := m.store.SaveRun(ctx, child, prepared.template.Version, prepared.hash); err != nil {
 			return Run{}, err
 		}
 		parent.Children = append(parent.Children, child.ID)
@@ -96,7 +125,7 @@ func (m *SQLModule) startCardSet(ctx context.Context, request StartRequest) (Run
 	if len(parent.Children) == 0 {
 		parent.State = Succeeded
 	}
-	if err := m.store.SaveRun(ctx, parent, "card-set-v1", ""); err != nil {
+	if err := m.store.SaveRun(ctx, parent, "card-set-v1", parentHash); err != nil {
 		return Run{}, err
 	}
 	return parent, nil

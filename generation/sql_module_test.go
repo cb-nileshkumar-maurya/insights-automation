@@ -85,3 +85,40 @@ func TestSQLModulePersistsCompletedCardSetStatus(t *testing.T) {
 		t.Fatalf("parent=%#v err=%v", freshParent, err)
 	}
 }
+
+func TestSQLModuleReconciliationJoinsActiveCardSetAndSkipsHealthyWrites(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenSQLRunStore(ctx, DatabaseConfig{Dialect: SQLite, DSN: filepath.Join(t.TempDir(), "reconciliation.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.db.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultConfiguration()
+	module := NewSQLModule(config, store, ClockFunc(func() Time { return ParseTime("2026-09-09T00:00:00Z") }))
+	request := StartRequest{Target: CardTarget{CardSet: "pre_toss_v1"}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"team_a": "1", "team_b": "2", "players": []string{"3"}, "venue": "4", "format": "t20"}, Caller: Caller{Role: Scheduler}}
+	first, err := module.StartRun(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined, err := module.StartRun(ctx, request)
+	if err != nil || joined.ID != first.ID {
+		t.Fatalf("joined=%#v err=%v", joined, err)
+	}
+	responses := map[TemplateID]GeneratedData{}
+	for _, template := range config.CardSets["pre_toss_v1"] {
+		responses[template] = GeneratedData{SampleSize: 10}
+	}
+	worker := NewSQLWorker(store, &ScriptedCricketData{Responses: responses}, config, "test-worker")
+	for range first.Children {
+		if claimed, err := worker.ProcessOne(ctx); err != nil || !claimed {
+			t.Fatalf("claimed=%v err=%v", claimed, err)
+		}
+	}
+	healthy, err := module.StartRun(ctx, request)
+	if err != nil || healthy.ID != "current-card-set" || len(healthy.Children) != 0 {
+		t.Fatalf("healthy=%#v err=%v", healthy, err)
+	}
+}

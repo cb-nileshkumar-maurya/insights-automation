@@ -196,6 +196,24 @@ FROM generation_runs WHERE id = ?`, id)
 	return run, nil
 }
 
+// FindActiveRun returns matching normal work so concurrent reconciliation
+// passes join the original request instead of creating duplicate children.
+func (s *SQLRunStore) FindActiveRun(ctx context.Context, target CardTarget, matchID string, cardState CardState, inputHash string) (Run, error) {
+	column, targetID := "template_id", string(target.Template)
+	if target.CardSet != "" {
+		column, targetID = "card_set_id", target.CardSet
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT id FROM generation_runs WHERE `+column+` = ? AND match_id = ? AND card_state = ? AND input_hash = ? AND mode = 'normal' AND state IN ('queued', 'running') ORDER BY created_at LIMIT 1`, targetID, matchID, cardState, inputHash)
+	var id string
+	if err := row.Scan(&id); err != nil {
+		if err == sql.ErrNoRows {
+			return Run{}, ErrNotFound
+		}
+		return Run{}, fmt.Errorf("find active generation run: %w", err)
+	}
+	return s.LoadRun(ctx, id)
+}
+
 func (s *SQLRunStore) LoadCurrentResult(ctx context.Context, template TemplateID, templateVersion, matchID string, cardState CardState, inputHash string) (Result, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT r.result_version, r.normalized_inputs, r.source_data_window, r.sample_size,
