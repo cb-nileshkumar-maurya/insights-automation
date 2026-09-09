@@ -64,8 +64,15 @@ func New(ctx context.Context, config Config) (*Service, error) {
 	if config.Eligible == nil {
 		config.Eligible = emptyEligibleMatches{}
 	}
-	if config.Ready == nil {
-		config.Ready = store.Ping
+	externalReady := config.Ready
+	config.Ready = func(readyContext context.Context) error {
+		if err := store.Ping(readyContext); err != nil {
+			return err
+		}
+		if externalReady != nil {
+			return externalReady(readyContext)
+		}
+		return nil
 	}
 	return &Service{store: store, module: module, worker: generation.NewSQLWorker(store, config.Data, generation.DefaultConfiguration(), config.WorkerID), reconciler: generation.NewReconciler(config.Eligible, module, "pre_toss_v1"), workerPoll: config.WorkerPoll, roleResolver: config.RoleResolver, ready: config.Ready}, nil
 }
