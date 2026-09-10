@@ -63,3 +63,44 @@ func TestLocalServiceStartsAndServesGeneratedCards(t *testing.T) {
 	}
 	t.Fatal("current generated card was not available")
 }
+
+func TestLocalServiceMakesMissingHistoricalSourceVisible(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service, err := app.New(ctx, app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: filepath.Join(t.TempDir(), "generation.db")}, WorkerPoll: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	go service.Run(ctx)
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+	response, err := http.Post(server.URL+"/v1/runs", "application/json", bytes.NewBufferString(`{"target":{"template":"h2h_record"},"match_id":"m-1","card_state":"pre_toss","inputs":{"team_a":"1","team_b":"2","format":"t20"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var submitted generation.Run
+	if err := json.NewDecoder(response.Body).Decode(&submitted); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		response, err = http.Get(server.URL + "/v1/runs/" + submitted.ID)
+		if err == nil && response.StatusCode == http.StatusOK {
+			var run generation.Run
+			err = json.NewDecoder(response.Body).Decode(&run)
+			response.Body.Close()
+			if err == nil && run.State == generation.Failed {
+				if run.Failure == nil || run.Failure.Kind != generation.ConfigurationFailure || run.Failure.Message != "historical data source is not configured for h2h record" {
+					t.Fatalf("failure=%#v", run.Failure)
+				}
+				return
+			}
+		} else if response != nil {
+			response.Body.Close()
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("missing historical source was not reported")
+}

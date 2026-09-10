@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -48,7 +49,10 @@ func New(ctx context.Context, config Config) (*Service, error) {
 			return nil, err
 		}
 	}
+	historicalSourceConfigured := config.Data != nil
 	if config.Data == nil {
+		// SQLite local mode exercises durable run handling without silently
+		// inventing historical cricket data.
 		config.Data = unavailableData{}
 	}
 	if config.WorkerPoll <= 0 {
@@ -62,6 +66,8 @@ func New(ctx context.Context, config Config) (*Service, error) {
 	}
 	module := generation.NewSQLModule(generation.DefaultConfiguration(), store, generation.ClockFunc(func() time.Time { return time.Now().UTC() }))
 	if config.Eligible == nil {
+		// Match discovery is injected because the authoritative upcoming-match
+		// and squad population source is deployment-specific.
 		config.Eligible = emptyEligibleMatches{}
 	}
 	externalReady := config.Ready
@@ -74,6 +80,7 @@ func New(ctx context.Context, config Config) (*Service, error) {
 		}
 		return nil
 	}
+	slog.Info("insights automation initialized", "write_dialect", config.WriteDatabase.Dialect, "historical_source_configured", historicalSourceConfigured, "worker_id", config.WorkerID)
 	return &Service{store: store, module: module, worker: generation.NewSQLWorker(store, config.Data, generation.DefaultConfiguration(), config.WorkerID), reconciler: generation.NewReconciler(config.Eligible, module, "pre_toss_v1"), workerPoll: config.WorkerPoll, roleResolver: config.RoleResolver, ready: config.Ready}, nil
 }
 
@@ -107,6 +114,7 @@ func (s *Service) Handler() http.Handler {
 
 func (s *Service) health(writer http.ResponseWriter, request *http.Request) {
 	if err := s.ready(request.Context()); err != nil {
+		slog.Warn("readiness check failed", "error", err)
 		writeError(writer, http.StatusServiceUnavailable, "service is not ready")
 		return
 	}
@@ -124,23 +132,28 @@ type submitRequest struct {
 func (s *Service) submitRun(writer http.ResponseWriter, request *http.Request) {
 	var submitted submitRequest
 	if err := json.NewDecoder(request.Body).Decode(&submitted); err != nil {
+		slog.Debug("generation run rejected", "reason", "invalid_json")
 		writeError(writer, http.StatusBadRequest, "invalid JSON request")
 		return
 	}
 	role, err := s.roleResolver(request)
 	if err != nil || !knownRole(role) {
+		slog.Warn("generation run rejected", "reason", "unauthorized_caller")
 		writeError(writer, http.StatusForbidden, "caller is not authorized")
 		return
 	}
 	run, err := s.module.StartRun(request.Context(), generation.StartRequest{Target: submitted.Target, MatchID: submitted.MatchID, CardState: submitted.CardState, Inputs: submitted.Inputs, Caller: generation.Caller{Role: role}, Mode: submitted.Mode})
 	if errors.Is(err, generation.ErrUnauthorized) {
+		slog.Warn("generation run rejected", "reason", "unauthorized_regeneration", "template", submitted.Target.Template, "card_set", submitted.Target.CardSet, "match_id", submitted.MatchID)
 		writeError(writer, http.StatusForbidden, err.Error())
 		return
 	}
 	if err != nil {
+		slog.Warn("generation run rejected", "reason", "invalid_request", "template", submitted.Target.Template, "card_set", submitted.Target.CardSet, "match_id", submitted.MatchID, "error", err)
 		writeError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
+	slog.Info("generation run accepted", "run_id", run.ID, "parent_run_id", run.ParentID, "template", submitted.Target.Template, "card_set", submitted.Target.CardSet, "match_id", submitted.MatchID, "card_state", submitted.CardState, "mode", run.Mode, "role", role)
 	writeJSON(writer, http.StatusAccepted, run)
 }
 
@@ -200,6 +213,7 @@ func writeError(writer http.ResponseWriter, status int, message string) {
 type unavailableData struct{}
 
 func (unavailableData) Generate(_ context.Context, query generation.GenerationQuery) generation.GeneratedData {
+	slog.Warn("historical source is not configured", "template", query.Template, "match_id", query.MatchID, "action", "set production mode and replica configuration")
 	return generation.GeneratedData{Err: &generation.RunFailure{Kind: generation.ConfigurationFailure, Message: fmt.Sprintf("historical data source is not configured for %s", strings.ReplaceAll(string(query.Template), "_", " "))}}
 }
 

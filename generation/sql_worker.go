@@ -3,6 +3,7 @@ package generation
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -66,6 +67,7 @@ func (w *SQLWorker) ProcessOne(ctx context.Context) (bool, error) {
 	if err != nil || !claimed {
 		return claimed, err
 	}
+	slog.Debug("generation worker claimed run", "run_id", run.ID, "parent_run_id", run.ParentID, "template", run.Target.Template, "match_id", run.MatchID, "attempt", run.Attempt, "worker_id", w.workerID)
 	template, ok := w.config.Templates[run.Target.Template]
 	if !ok {
 		return true, w.finishFailure(ctx, run, "", &RunFailure{Kind: ConfigurationFailure, Message: "unknown card template"})
@@ -81,15 +83,19 @@ func (w *SQLWorker) ProcessOne(ctx context.Context) (bool, error) {
 	stopHeartbeat()
 	cancel()
 	if generated.Err != nil {
+		slog.Warn("generation run failed", "run_id", run.ID, "template", run.Target.Template, "match_id", run.MatchID, "failure_kind", generated.Err.Kind, "failure_message", generated.Err.Message, "attempt", run.Attempt)
 		return true, w.finishFailure(ctx, run, hash, generated.Err)
 	}
 	if timedOut {
+		slog.Warn("generation run exceeded deadline", "run_id", run.ID, "template", run.Target.Template, "match_id", run.MatchID, "deadline", w.deadline)
 		return true, w.finishFailure(ctx, run, hash, &RunFailure{Kind: TransientFailure, Message: "generation deadline exceeded"})
 	}
 	result := Result{Version: run.ResultVersion + 1, Envelope: ResultEnvelope{Template: run.Target.Template, TemplateVersion: template.Version, NormalizedFilters: canonicalInputs(run.NormalizedInputs), SourceDataWindow: generated.SourceDataWindow, SampleSize: generated.SampleSize, GeneratedAt: w.now(), ResultVersion: run.ResultVersion + 1, Fallbacks: generated.Fallbacks}, Data: generated.Data}
 	if err := w.store.SaveResult(ctx, run, template.Version, hash, result); err != nil {
+		slog.Warn("generation result persistence failed", "run_id", run.ID, "template", run.Target.Template, "match_id", run.MatchID, "error", err)
 		return true, w.finishFailure(ctx, run, hash, &RunFailure{Kind: TransientFailure, Message: err.Error()})
 	}
+	slog.Info("generation run completed", "run_id", run.ID, "parent_run_id", run.ParentID, "template", run.Target.Template, "match_id", run.MatchID, "result_version", result.Version, "sample_size", result.Envelope.SampleSize)
 	return true, w.store.RefreshParentStatus(ctx, run.ParentID)
 }
 
@@ -115,6 +121,7 @@ func (w *SQLWorker) heartbeat(ctx context.Context, runID string) func() {
 
 func (w *SQLWorker) finishFailure(ctx context.Context, run Run, inputHash string, failure *RunFailure) error {
 	if failure.Kind == TransientFailure && run.Attempt < 2 {
+		slog.Info("generation run requeued", "run_id", run.ID, "template", run.Target.Template, "match_id", run.MatchID, "attempt", run.Attempt+1, "failure_kind", failure.Kind)
 		return w.store.Requeue(ctx, run.ID, run.Attempt+1, w.now().Add(retryDelay(run.Attempt)), failure)
 	}
 	if err := w.store.Fail(ctx, run.ID, failure); err != nil {

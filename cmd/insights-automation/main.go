@@ -22,6 +22,7 @@ func main() {
 		slog.Error("load local environment", "error", err)
 		os.Exit(1)
 	}
+	configureLogger(envOr("INSIGHTS_AUTOMATION_LOG_LEVEL", "info"))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	config, replica, err := runtimeConfig(ctx)
@@ -56,6 +57,19 @@ func main() {
 		slog.Error("serve insights automation", "error", err)
 		os.Exit(1)
 	}
+}
+
+func configureLogger(level string) {
+	configured := slog.LevelInfo
+	switch strings.ToLower(level) {
+	case "debug":
+		configured = slog.LevelDebug
+	case "warn", "warning":
+		configured = slog.LevelWarn
+	case "error":
+		configured = slog.LevelError
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: configured})))
 }
 
 func runtimeConfig(ctx context.Context) (app.Config, interface{ Close() error }, error) {

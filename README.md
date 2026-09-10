@@ -20,4 +20,6 @@ curl -X POST http://localhost:8080/v1/runs \
 
 Local mode deliberately has no historical cricket source. A submitted card run records a visible configuration failure until a production MariaDB replica is configured.
 
+Set `INSIGHTS_AUTOMATION_LOG_LEVEL=debug` in `.env` to see run claims, request validation, worker execution, retries, and persistence events. Logs include run, template, match, and failure identifiers but never database credentials or request payloads.
+
 To use a different local database file, set `INSIGHTS_AUTOMATION_SQLITE_PATH`. Production mode requires `INSIGHTS_AUTOMATION_MODE=production`, `INSIGHTS_AUTOMATION_WRITE_DSN`, and the existing replica variables `SITE_DB_USERNAME_NOMAD`, `SITE_DB_PASSWORD_NOMAD`, `SITE_DB_HOST`, and `SITE_DB`.
