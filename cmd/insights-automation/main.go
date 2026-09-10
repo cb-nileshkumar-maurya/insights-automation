@@ -14,9 +14,14 @@ import (
 
 	"github.com/cricbuzz/insights-automation/app"
 	"github.com/cricbuzz/insights-automation/generation"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		slog.Error("load local environment", "error", err)
+		os.Exit(1)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	config, replica, err := runtimeConfig(ctx)

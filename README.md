@@ -8,6 +8,8 @@ go run ./cmd/insights-automation
 
 The service listens on `:8080`, creates `data/insights-automation.db`, and exposes `GET /healthz`, `POST /v1/runs`, `GET /v1/runs/{id}`, and `GET /v1/results`.
 
+The command loads a `.env` file from its working directory before reading configuration. Values already exported in your shell take precedence, and `.env` remains local-only.
+
 Submit an approved normal request:
 
 ```bash
