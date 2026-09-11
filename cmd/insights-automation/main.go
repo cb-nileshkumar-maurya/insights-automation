@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -82,7 +83,7 @@ func runtimeConfig(ctx context.Context) (app.Config, interface{ Close() error },
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return app.Config{}, nil, err
 		}
-		return app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: path}}, nil, nil
+		return localConfig(ctx, path, generation.OpenReadReplica)
 	}
 	writeDSN := os.Getenv("INSIGHTS_AUTOMATION_WRITE_DSN")
 	if writeDSN == "" {
@@ -92,7 +93,34 @@ func runtimeConfig(ctx context.Context) (app.Config, interface{ Close() error },
 	if err != nil {
 		return app.Config{}, nil, err
 	}
-	data := generation.NewTemplateData(map[generation.TemplateID]generation.CricketData{
+	data := dataForReplica(replica)
+	resolver, err := productionRoleResolver()
+	if err != nil {
+		replica.Close()
+		return app.Config{}, nil, err
+	}
+	return app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.MariaDB, DSN: writeDSN}, Data: data, RoleResolver: resolver, Ready: replica.PingContext}, replica, nil
+}
+
+func localConfig(ctx context.Context, path string, openReplica func(context.Context) (*sql.DB, error)) (app.Config, interface{ Close() error }, error) {
+	config := app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: path}}
+	if !replicaSettingsPresent() {
+		return config, nil, nil
+	}
+	replica, err := openReplica(ctx)
+	if err != nil {
+		return app.Config{}, nil, err
+	}
+	config.Data, config.Ready = dataForReplica(replica), replica.PingContext
+	return config, replica, nil
+}
+
+func replicaSettingsPresent() bool {
+	return os.Getenv("SITE_DB_USERNAME_NOMAD") != "" || os.Getenv("SITE_DB_PASSWORD_NOMAD") != "" || os.Getenv("SITE_DB_HOST") != "" || os.Getenv("SITE_DB") != ""
+}
+
+func dataForReplica(replica *sql.DB) generation.CricketData {
+	return generation.NewTemplateData(map[generation.TemplateID]generation.CricketData{
 		generation.H2HRecord:          generation.NewH2HGenerator(generation.NewMariaDBH2HHistory(replica)),
 		generation.TeamForm:           generation.NewTeamFormGenerator(generation.NewMariaDBTeamFormHistory(replica)),
 		generation.VenueDNA:           generation.NewVenueDNAGenerator(generation.NewMariaDBVenueHistory(replica)),
@@ -100,12 +128,6 @@ func runtimeConfig(ctx context.Context) (app.Config, interface{ Close() error },
 		generation.Last5Games:         generation.NewLast5GamesGenerator(generation.NewMariaDBLast5History(replica)),
 		generation.TeamPhaseProfiles:  generation.NewTeamPhaseProfilesGenerator(generation.NewMariaDBTeamPhaseHistory(replica)),
 	})
-	resolver, err := productionRoleResolver()
-	if err != nil {
-		replica.Close()
-		return app.Config{}, nil, err
-	}
-	return app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.MariaDB, DSN: writeDSN}, Data: data, RoleResolver: resolver, Ready: replica.PingContext}, replica, nil
 }
 
 func mode() string { return envOr("INSIGHTS_AUTOMATION_MODE", "local") }
