@@ -85,13 +85,6 @@ type MariaDBTeamFormHistory struct{ db *sql.DB }
 func NewMariaDBTeamFormHistory(db *sql.DB) *MariaDBTeamFormHistory {
 	return &MariaDBTeamFormHistory{db: db}
 }
-func OpenMariaDBTeamFormGenerator(ctx context.Context) (*TeamFormGenerator, *sql.DB, error) {
-	db, err := OpenReadReplica(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	return NewTeamFormGenerator(NewMariaDBTeamFormHistory(db)), db, nil
-}
 func (h *MariaDBTeamFormHistory) FindTeamForm(ctx context.Context, team, format, latest int) ([]TeamFormMatch, error) {
 	rows, err := h.db.QueryContext(ctx, `SELECT m.id, COALESCE(m.winner, 0), COALESCE(r.winningMargin, 0), COALESCE(r.winByRuns, 0), m.startdt FROM krik_match_archive m LEFT JOIN stats_import3_dump_matchresult_tbl r ON r.matchId = m.id WHERE (m.teama = ? OR m.teamb = ?) AND m.match_type_id = ? AND m.isArchived = 1 ORDER BY m.startdt DESC LIMIT ?`, team, team, format, latest)
 	if err != nil {

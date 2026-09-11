@@ -78,14 +78,6 @@ func NewMariaDBTeamPhaseHistory(db *sql.DB) *MariaDBTeamPhaseHistory {
 	return &MariaDBTeamPhaseHistory{db: db}
 }
 
-func OpenMariaDBTeamPhaseProfilesGenerator(ctx context.Context) (*TeamPhaseProfilesGenerator, *sql.DB, error) {
-	db, err := OpenReadReplica(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	return NewTeamPhaseProfilesGenerator(NewMariaDBTeamPhaseHistory(db)), db, nil
-}
-
 func (h *MariaDBTeamPhaseHistory) PhaseProfiles(ctx context.Context, teams []int, format int, window string, career bool) (map[int]map[string]PhaseMetric, error) {
 	if len(teams) == 0 {
 		return map[int]map[string]PhaseMetric{}, nil

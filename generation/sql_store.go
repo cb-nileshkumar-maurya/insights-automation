@@ -1,6 +1,7 @@
 package generation
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -13,10 +14,6 @@ import (
 type SQLRunStore struct {
 	db      *sql.DB
 	dialect DatabaseDialect
-}
-
-func NewSQLRunStore(db *sql.DB) (*SQLRunStore, error) {
-	return NewSQLRunStoreWithDialect(db, MariaDB)
 }
 
 func NewSQLRunStoreWithDialect(db *sql.DB, dialect DatabaseDialect) (*SQLRunStore, error) {
@@ -171,7 +168,7 @@ FROM generation_runs WHERE id = ?`, id)
 		}
 		return Run{}, fmt.Errorf("load generation run: %w", err)
 	}
-	if err := json.Unmarshal(inputs, &run.NormalizedInputs); err != nil {
+	if err := decodeNormalizedInputs(inputs, &run.NormalizedInputs); err != nil {
 		return Run{}, fmt.Errorf("decode normalized inputs: %w", err)
 	}
 	run.Target = CardTarget{Template: TemplateID(template), CardSet: cardSet}
@@ -198,6 +195,56 @@ FROM generation_runs WHERE id = ?`, id)
 		return Run{}, fmt.Errorf("iterate child generation runs: %w", err)
 	}
 	return run, nil
+}
+
+func decodeNormalizedInputs(data []byte, inputs *map[string]any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(inputs); err != nil {
+		return err
+	}
+	for key, value := range *inputs {
+		normalized, err := normalizeInputJSON(value)
+		if err != nil {
+			return err
+		}
+		(*inputs)[key] = normalized
+	}
+	return nil
+}
+
+func normalizeInputJSON(value any) (any, error) {
+	switch value := value.(type) {
+	case json.Number:
+		integer, err := value.Int64()
+		if err != nil {
+			return nil, err
+		}
+		return int(integer), nil
+	case []any:
+		values := make([]any, len(value))
+		strings := make([]string, len(value))
+		allStrings := true
+		for index, item := range value {
+			normalized, err := normalizeInputJSON(item)
+			if err != nil {
+				return nil, err
+			}
+			values[index] = normalized
+			stringValue, ok := normalized.(string)
+			if !ok {
+				allStrings = false
+				continue
+			}
+			strings[index] = stringValue
+		}
+		if allStrings {
+			return strings, nil
+		}
+		return values, nil
+	default:
+		return value, nil
+	}
 }
 
 // FindActiveRun returns matching normal work so concurrent reconciliation

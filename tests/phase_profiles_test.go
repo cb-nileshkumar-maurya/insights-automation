@@ -28,13 +28,9 @@ func TestTeamPhaseProfilesReturnsBothTeamsAndFallsBackPerPhase(t *testing.T) {
 		},
 		career: map[int]map[string]PhaseMetric{1: {"death": {Innings: 20, Runs: 300, Deliveries: 120, Wickets: 12, Boundaries: 38, DotBalls: 40}}},
 	}
-	module := NewModule(DefaultConfiguration(), NewTeamPhaseProfilesGenerator(history), NewMemoryRunStore(), ClockFunc(func() Time { return ParseTime("2026-09-09T00:00:00Z") }))
-	run, err := module.StartRun(context.Background(), StartRequest{Target: CardTarget{Template: TeamPhaseProfiles}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"team_a": "1", "team_b": "2", "format": "t20"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	module.ProcessAll(context.Background())
-	result, err := module.GetCurrentResult(context.Background(), TeamPhaseProfiles, "m-1", PreToss, run.NormalizedInputs)
+	harness := newGenerationHarness(t, NewTeamPhaseProfilesGenerator(history))
+	run := harness.startAndProcess(t, StartRequest{Target: CardTarget{Template: TeamPhaseProfiles}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"team_a": "1", "team_b": "2", "format": "t20"}})
+	result, err := harness.module.GetCurrentResult(harness.ctx, TeamPhaseProfiles, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,13 +39,13 @@ func TestTeamPhaseProfilesReturnsBothTeamsAndFallsBackPerPhase(t *testing.T) {
 		t.Fatalf("result=%#v", result)
 	}
 	death := teams[0].(map[string]any)["phases"].(map[string]any)["death"].(map[string]any)
-	if !death["career_fallback"].(bool) || death["runs"].(int) != 300 || death["rate"].(float64) != 15 {
+	if !death["career_fallback"].(bool) || death["runs"].(float64) != 300 || death["rate"].(float64) != 15 {
 		t.Fatalf("death=%#v", death)
 	}
 }
 
 func TestTeamPhaseProfilesRejectsTestFormat(t *testing.T) {
-	module := NewModule(DefaultConfiguration(), NewTeamPhaseProfilesGenerator(fixedTeamPhaseHistory{}), NewMemoryRunStore(), ClockFunc(func() Time { return ParseTime("2026-09-09T00:00:00Z") }))
+	module := NewSQLModule(DefaultConfiguration(), openWorkerTestStore(t), ClockFunc(func() Time { return ParseTime("2026-09-09T00:00:00Z") }))
 	_, err := module.StartRun(context.Background(), StartRequest{Target: CardTarget{Template: TeamPhaseProfiles}, Inputs: map[string]any{"team_a": "1", "team_b": "2", "format": "test"}})
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("test format error = %v", err)

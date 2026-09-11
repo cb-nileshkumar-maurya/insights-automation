@@ -82,14 +82,6 @@ type MariaDBLast5History struct{ db *sql.DB }
 
 func NewMariaDBLast5History(db *sql.DB) *MariaDBLast5History { return &MariaDBLast5History{db: db} }
 
-func OpenMariaDBLast5GamesGenerator(ctx context.Context) (*Last5GamesGenerator, *sql.DB, error) {
-	db, err := OpenReadReplica(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	return NewLast5GamesGenerator(NewMariaDBLast5History(db)), db, nil
-}
-
 func (h *MariaDBLast5History) LastGames(ctx context.Context, players []int, format, latest int) (map[int][]PlayerGame, map[int]PlayerCareerComparison, error) {
 	marks, ids := playerPlaceholders(players)
 	recentArgs := append([]any{}, ids...)

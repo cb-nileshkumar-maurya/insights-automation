@@ -88,13 +88,6 @@ type MariaDBPlayerVenueHistory struct{ db *sql.DB }
 func NewMariaDBPlayerVenueHistory(db *sql.DB) *MariaDBPlayerVenueHistory {
 	return &MariaDBPlayerVenueHistory{db: db}
 }
-func OpenMariaDBPlayerVenueGenerator(ctx context.Context) (*PlayerVenueGenerator, *sql.DB, error) {
-	db, err := OpenReadReplica(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	return NewPlayerVenueGenerator(NewMariaDBPlayerVenueHistory(db)), db, nil
-}
 func (h *MariaDBPlayerVenueHistory) PlayerVenueStats(ctx context.Context, players []int, venue, format int, window string, career bool) (map[int]PlayerVenueDiscipline, map[int]PlayerVenueDiscipline, error) {
 	marks, args := playerPlaceholders(players)
 	filter := "m.match_type_id = ?"

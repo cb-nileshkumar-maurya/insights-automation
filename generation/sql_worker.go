@@ -2,7 +2,6 @@ package generation
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -131,5 +130,3 @@ func (w *SQLWorker) finishFailure(ctx context.Context, run Run, inputHash string
 }
 
 func retryDelay(attempt int) time.Duration { return time.Second << attempt }
-
-func (w *SQLWorker) String() string { return fmt.Sprintf("SQLWorker(%s)", w.workerID) }

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"reflect"
 	"time"
 )
 
@@ -168,4 +169,42 @@ func newRunID() string {
 		panic("cannot create generation run id")
 	}
 	return hex.EncodeToString(bytes)
+}
+
+func inputsForTemplate(template Template, inputs map[string]any) map[string]any {
+	filtered := make(map[string]any)
+	for key, value := range inputs {
+		if _, allowed := template.Allowed[key]; allowed {
+			filtered[key] = value
+		}
+	}
+	return filtered
+}
+
+func validate(template Template, inputs map[string]any) (map[string]any, error) {
+	normalized := canonicalInputs(template.Defaults)
+	for key, value := range inputs {
+		allowed, known := template.Allowed[key]
+		if !known {
+			return nil, fmt.Errorf("%w: %s is not allowed", ErrInvalidRequest, key)
+		}
+		if len(allowed) > 0 {
+			valid := false
+			for _, choice := range allowed {
+				if reflect.DeepEqual(choice, value) {
+					valid = true
+				}
+			}
+			if !valid {
+				return nil, fmt.Errorf("%w: %s is not approved", ErrInvalidRequest, key)
+			}
+		}
+		normalized[key] = value
+	}
+	for _, required := range template.Required {
+		if _, ok := normalized[required]; !ok {
+			return nil, fmt.Errorf("%w: %s is required", ErrInvalidRequest, required)
+		}
+	}
+	return normalized, nil
 }

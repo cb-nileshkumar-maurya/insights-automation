@@ -126,13 +126,6 @@ func formatID(inputs map[string]any) (int, error) {
 type MariaDBH2HHistory struct{ db *sql.DB }
 
 func NewMariaDBH2HHistory(db *sql.DB) *MariaDBH2HHistory { return &MariaDBH2HHistory{db: db} }
-func OpenMariaDBH2HGenerator(ctx context.Context) (*H2HGenerator, *sql.DB, error) {
-	db, err := OpenReadReplica(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	return NewH2HGenerator(NewMariaDBH2HHistory(db)), db, nil
-}
 func (h *MariaDBH2HHistory) FindH2H(ctx context.Context, teamA, teamB, format int, venue *int, latest int) ([]H2HMatchRecord, error) {
 	args := []any{teamA, teamB, teamB, teamA, format}
 	venueClause := ""

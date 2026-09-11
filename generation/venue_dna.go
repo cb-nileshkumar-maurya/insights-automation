@@ -82,13 +82,6 @@ func (g *VenueDNAGenerator) Generate(ctx context.Context, query GenerationQuery)
 type MariaDBVenueHistory struct{ db *sql.DB }
 
 func NewMariaDBVenueHistory(db *sql.DB) *MariaDBVenueHistory { return &MariaDBVenueHistory{db: db} }
-func OpenMariaDBVenueDNAGenerator(ctx context.Context) (*VenueDNAGenerator, *sql.DB, error) {
-	db, err := OpenReadReplica(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	return NewVenueDNAGenerator(NewMariaDBVenueHistory(db)), db, nil
-}
 func (h *MariaDBVenueHistory) VenueMatches(ctx context.Context, venue, format int, window string) ([]VenueMatch, error) {
 	return h.find(ctx, `m.venueid = ?`, []any{venue}, format, window)
 }

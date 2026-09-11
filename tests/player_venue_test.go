@@ -17,15 +17,10 @@ func (history fixedPlayerVenueHistory) PlayerVenueStats(_ context.Context, _ []i
 }
 
 func TestPlayerVenueStatsFallsBackPerDiscipline(t *testing.T) {
-	now := ParseTime("2026-09-08T10:00:00Z")
 	history := fixedPlayerVenueHistory{batting: map[int]PlayerVenueDiscipline{1: {Innings: 15, Runs: 400}, 2: {Innings: 2, Runs: 20}}, bowling: map[int]PlayerVenueDiscipline{1: {Innings: 2, Wickets: 1}, 2: {Innings: 15, Wickets: 20}}, careerBatting: map[int]PlayerVenueDiscipline{2: {Innings: 30, Runs: 900}}, careerBowling: map[int]PlayerVenueDiscipline{1: {Innings: 25, Wickets: 30}}}
-	module := NewModule(DefaultConfiguration(), NewPlayerVenueGenerator(history), NewMemoryRunStore(), ClockFunc(func() Time { return now }))
-	run, err := module.StartRun(context.Background(), StartRequest{Target: CardTarget{Template: PlayerStatsAtVenue}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"players": []string{"1", "2"}, "venue": "10", "format": "t20"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	module.ProcessAll(context.Background())
-	result, err := module.GetCurrentResult(context.Background(), PlayerStatsAtVenue, "m-1", PreToss, run.NormalizedInputs)
+	harness := newGenerationHarness(t, NewPlayerVenueGenerator(history))
+	run := harness.startAndProcess(t, StartRequest{Target: CardTarget{Template: PlayerStatsAtVenue}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"players": []string{"1", "2"}, "venue": "10", "format": "t20"}})
+	result, err := harness.module.GetCurrentResult(harness.ctx, PlayerStatsAtVenue, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil || len(result.Envelope.Fallbacks) != 2 {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}

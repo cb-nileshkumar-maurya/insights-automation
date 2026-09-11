@@ -2,11 +2,42 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	. "github.com/cricbuzz/insights-automation/generation"
 )
+
+type generationHarness struct {
+	ctx    context.Context
+	module *SQLModule
+	worker *SQLWorker
+}
+
+func newGenerationHarness(t *testing.T, data CricketData) generationHarness {
+	t.Helper()
+	store := openWorkerTestStore(t)
+	config := DefaultConfiguration()
+	return generationHarness{
+		ctx:    context.Background(),
+		module: NewSQLModule(config, store, ClockFunc(func() Time { return ParseTime("2026-09-08T10:00:00Z") })),
+		worker: NewSQLWorker(store, data, config, "test-worker"),
+	}
+}
+
+func (h generationHarness) startAndProcess(t *testing.T, request StartRequest) Run {
+	t.Helper()
+	run, err := h.module.StartRun(h.ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := h.worker.ProcessOne(h.ctx); err != nil || !claimed {
+		t.Fatalf("claimed=%v err=%v", claimed, err)
+	}
+	return run
+}
 
 func TestSQLModuleKeepsCurrentResultAfterModuleRestart(t *testing.T) {
 	ctx := context.Background()
@@ -55,6 +86,29 @@ func TestSQLModuleKeepsCurrentResultAfterModuleRestart(t *testing.T) {
 	}
 }
 
+func TestSQLModuleRetainsStaleResultWithoutReturningItAsCurrent(t *testing.T) {
+	ctx, store := context.Background(), openWorkerTestStore(t)
+	now := ParseTime("2026-09-08T10:00:00Z")
+	config := DefaultConfiguration()
+	module := NewSQLModule(config, store, ClockFunc(func() Time { return now }))
+	run, err := module.StartRun(ctx, StartRequest{Target: CardTarget{Template: TeamForm}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"team_a": "1", "team_b": "2", "format": "t20"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := NewSQLWorkerWithOptions(store, &ScriptedCricketData{Responses: map[TemplateID]GeneratedData{TeamForm: {SampleSize: 5}}}, config, "test-worker", SQLWorkerOptions{Now: func() time.Time { return now }})
+	if claimed, err := worker.ProcessOne(ctx); err != nil || !claimed {
+		t.Fatalf("claimed=%v err=%v", claimed, err)
+	}
+	now = now.Add(16 * time.Minute)
+	if _, err := module.GetCurrentResult(ctx, TeamForm, "m-1", PreToss, run.NormalizedInputs); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale result error = %v", err)
+	}
+	stored, err := module.GetRun(ctx, run.ID)
+	if err != nil || stored.State != Succeeded || stored.ResultVersion != 1 {
+		t.Fatalf("stored=%#v err=%v", stored, err)
+	}
+}
+
 func TestSQLModulePersistsCompletedCardSetStatus(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenSQLRunStore(ctx, DatabaseConfig{Dialect: SQLite, DSN: filepath.Join(t.TempDir(), "card-set.db")})
@@ -85,6 +139,38 @@ func TestSQLModulePersistsCompletedCardSetStatus(t *testing.T) {
 	freshParent, err := NewSQLModule(config, store, ClockFunc(func() Time { return now })).GetRun(ctx, parent.ID)
 	if err != nil || freshParent.State != Succeeded || len(freshParent.Children) != 6 {
 		t.Fatalf("parent=%#v err=%v", freshParent, err)
+	}
+}
+
+func TestSQLModuleKeepsSuccessfulChildCurrentWhenCardSetChildFails(t *testing.T) {
+	ctx, store := context.Background(), openWorkerTestStore(t)
+	config := DefaultConfiguration()
+	module := NewSQLModule(config, store, ClockFunc(func() Time { return ParseTime("2026-09-08T10:00:00Z") }))
+	parent, err := module.StartRun(ctx, StartRequest{Target: CardTarget{CardSet: "pre_toss_v1"}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"team_a": "1", "team_b": "2", "players": []string{"3"}, "venue": "4", "format": "t20"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := NewSQLWorker(store, &ScriptedCricketData{Responses: map[TemplateID]GeneratedData{H2HRecord: {Data: map[string]any{"wins": 4}, SampleSize: 4}}}, config, "test-worker")
+	for range parent.Children {
+		if claimed, err := worker.ProcessOne(ctx); err != nil || !claimed {
+			t.Fatalf("claimed=%v err=%v", claimed, err)
+		}
+	}
+	completed, err := module.GetRun(ctx, parent.ID)
+	if err != nil || completed.State != CompletedWithErrors {
+		t.Fatalf("parent=%#v err=%v", completed, err)
+	}
+	result, err := module.GetCurrentResult(ctx, H2HRecord, "m-1", PreToss, map[string]any{"team_a": "1", "team_b": "2", "venue": "4", "format": "t20", "latest_matches": 10})
+	if err != nil || result.Version != 1 {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestSQLModuleRejectsUnapprovedMatchCount(t *testing.T) {
+	module := NewSQLModule(DefaultConfiguration(), openWorkerTestStore(t), ClockFunc(func() Time { return ParseTime("2026-09-08T10:00:00Z") }))
+	_, err := module.StartRun(context.Background(), StartRequest{Target: CardTarget{Template: Last5Games}, Inputs: map[string]any{"players": []string{"p1"}, "format": "t20", "latest_matches": 99}})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("free-form match count error = %v", err)
 	}
 }
 
