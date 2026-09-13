@@ -5,17 +5,21 @@ import (
 	"database/sql"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type H2HMatchRecord struct {
-	MatchID            int
-	Winner             int
-	Margin             int
-	WonByRuns          bool
-	PlayedAt           time.Time
-	FirstInningsScore  *int
-	SecondInningsScore *int
+	MatchID    int
+	Team1ID    int
+	Team1Name  string
+	Team2ID    int
+	Team2Name  string
+	Winner     int
+	ResultType string
+	Margin     int
+	WonByRuns  bool
+	PlayedAt   time.Time
 }
 type H2HHistory interface {
 	FindH2H(context.Context, int, int, int, *int, int) ([]H2HMatchRecord, error)
@@ -57,35 +61,31 @@ func (g *H2HGenerator) Generate(ctx context.Context, query GenerationQuery) Gene
 	if len(matches) == 0 {
 		return GeneratedData{Err: &RunFailure{Kind: SampleFailure, Message: "no comparable H2H matches"}}
 	}
-	wins, losses, draws, firstTotal, firstCount, secondTotal, secondCount := 0, 0, 0, 0, 0, 0, 0
-	margins, recent := make([]map[string]any, 0, len(matches)), make([]string, 0, len(matches))
+	wins := map[int]int{}
+	names := map[int]string{}
+	draws, noResults := 0, 0
+	records := make([]map[string]any, 0, len(matches))
 	for _, match := range matches {
-		outcome := "draw"
-		if match.Winner == teamA {
-			wins++
-			outcome = "win"
-		} else if match.Winner == teamB {
-			losses++
-			outcome = "loss"
-		} else {
+		names[match.Team1ID], names[match.Team2ID] = match.Team1Name, match.Team2Name
+		record := map[string]any{"match_id": match.MatchID, "start_date": match.PlayedAt.Format("2006-01-02"), "team1_id": match.Team1ID, "team2_id": match.Team2ID, "winner_team_id": nil, "margin": nil}
+		if match.Winner == teamA || match.Winner == teamB {
+			wins[match.Winner]++
+			record["outcome"] = "win"
+			record["winner_team_id"] = match.Winner
+			record["margin"] = map[string]any{"value": match.Margin, "type": marginType(match.WonByRuns)}
+			record["result_string"] = resultString(names[match.Winner], match.Margin, match.WonByRuns)
+		} else if strings.EqualFold(match.ResultType, "draw") {
 			draws++
+			record["outcome"] = "draw"
+			record["result_string"] = "Match drawn"
+		} else {
+			noResults++
+			record["outcome"] = "no_result"
+			record["result_string"] = "No result"
 		}
-		recent = append(recent, outcome)
-		marginType := "wickets"
-		if match.WonByRuns {
-			marginType = "runs"
-		}
-		margins = append(margins, map[string]any{"match_id": match.MatchID, "outcome": outcome, "value": match.Margin, "type": marginType, "played_at": match.PlayedAt.Format("2006-01-02")})
-		if match.FirstInningsScore != nil {
-			firstTotal += *match.FirstInningsScore
-			firstCount++
-		}
-		if match.SecondInningsScore != nil {
-			secondTotal += *match.SecondInningsScore
-			secondCount++
-		}
+		records = append(records, record)
 	}
-	data := map[string]any{"team_a": teamA, "team_b": teamB, "wins": wins, "losses": losses, "draws": draws, "win_rate": float64(wins) * 100 / float64(len(matches)), "margins": margins, "recent_sequence": recent, "average_first_innings_score": average(firstTotal, firstCount), "average_second_innings_score": average(secondTotal, secondCount)}
+	data := map[string]any{"summary": map[string]any{"matches_played": len(matches), "draws": draws, "no_results": noResults, "teams": []map[string]any{teamSummary(teamA, names[teamA], wins[teamA], wins[teamB], len(matches)), teamSummary(teamB, names[teamB], wins[teamB], wins[teamA], len(matches))}}, "head_to_head": records}
 	fallbacks := []string{}
 	if len(matches) < latest {
 		fallbacks = append(fallbacks, "available_history")
@@ -95,11 +95,21 @@ func (g *H2HGenerator) Generate(ctx context.Context, query GenerationQuery) Gene
 func invalidH2H(err error) GeneratedData {
 	return GeneratedData{Err: &RunFailure{Kind: ValidationFailure, Message: err.Error()}}
 }
-func average(total, count int) any {
-	if count == 0 {
-		return nil
+func teamSummary(id int, name string, wins, losses, total int) map[string]any {
+	return map[string]any{"team_id": id, "team_name": name, "wins": wins, "losses": losses, "win_rate": float64(wins) * 100 / float64(total)}
+}
+func marginType(wonByRuns bool) string {
+	if wonByRuns {
+		return "runs"
 	}
-	return float64(total) / float64(count)
+	return "wickets"
+}
+func resultString(winner string, margin int, wonByRuns bool) string {
+	unit := strings.TrimSuffix(marginType(wonByRuns), "s")
+	if margin != 1 {
+		unit += "s"
+	}
+	return fmt.Sprintf("%s won by %d %s", winner, margin, unit)
 }
 func inputID(inputs map[string]any, name string) (int, error) {
 	raw, ok := inputs[name]
@@ -134,7 +144,7 @@ func (h *MariaDBH2HHistory) FindH2H(ctx context.Context, teamA, teamB, format in
 		args = append(args, *venue)
 	}
 	args = append(args, latest)
-	rows, err := h.db.QueryContext(ctx, `SELECT m.id, COALESCE(m.winner, 0), COALESCE(r.winningMargin, 0), COALESCE(r.winByRuns, 0), m.startdt, MAX(CASE WHEN i.inningsId = 1 THEN i.runs END), MAX(CASE WHEN i.inningsId = 2 THEN i.runs END) FROM krik_match_archive m LEFT JOIN stats_import3_dump_matchresult_tbl r ON r.matchId = m.id LEFT JOIN stats_import3_dump_innings_tbl i ON i.matchId = m.id WHERE ((m.teama = ? AND m.teamb = ?) OR (m.teama = ? AND m.teamb = ?)) AND m.match_type_id = ? AND m.isArchived = 1`+venueClause+` GROUP BY m.id, m.winner, r.winningMargin, r.winByRuns, m.startdt ORDER BY m.startdt DESC LIMIT ?`, args...)
+	rows, err := h.db.QueryContext(ctx, `SELECT m.id, m.teama, COALESCE(team1.name, ''), m.teamb, COALESCE(team2.name, ''), COALESCE(r.winningTeamId, m.winner, 0), COALESCE(r.resultType, ''), COALESCE(r.winningMargin, 0), COALESCE(r.winByRuns, 0), m.startdt FROM krik_match_archive m LEFT JOIN krik_teams team1 ON team1.id = m.teama LEFT JOIN krik_teams team2 ON team2.id = m.teamb LEFT JOIN stats_import3_dump_matchresult_tbl r ON r.matchId = m.id WHERE ((m.teama = ? AND m.teamb = ?) OR (m.teama = ? AND m.teamb = ?)) AND m.match_type_id = ? AND m.isArchived = 1`+venueClause+` ORDER BY m.startdt DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -142,17 +152,8 @@ func (h *MariaDBH2HHistory) FindH2H(ctx context.Context, teamA, teamB, format in
 	results := []H2HMatchRecord{}
 	for rows.Next() {
 		var result H2HMatchRecord
-		var first, second sql.NullInt64
-		if err := rows.Scan(&result.MatchID, &result.Winner, &result.Margin, &result.WonByRuns, &result.PlayedAt, &first, &second); err != nil {
+		if err := rows.Scan(&result.MatchID, &result.Team1ID, &result.Team1Name, &result.Team2ID, &result.Team2Name, &result.Winner, &result.ResultType, &result.Margin, &result.WonByRuns, &result.PlayedAt); err != nil {
 			return nil, err
-		}
-		if first.Valid {
-			value := int(first.Int64)
-			result.FirstInningsScore = &value
-		}
-		if second.Valid {
-			value := int(second.Int64)
-			result.SecondInningsScore = &value
 		}
 		results = append(results, result)
 	}
