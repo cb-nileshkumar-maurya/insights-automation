@@ -247,14 +247,14 @@ func normalizeInputJSON(value any) (any, error) {
 	}
 }
 
-// FindActiveRun returns matching normal work so concurrent reconciliation
-// passes join the original request instead of creating duplicate children.
-func (s *SQLRunStore) FindActiveRun(ctx context.Context, target CardTarget, matchID string, cardState CardState, inputHash string) (Run, error) {
+// FindActiveRun returns matching work in the same mode so concurrent requests
+// join it instead of creating duplicate result versions.
+func (s *SQLRunStore) FindActiveRun(ctx context.Context, target CardTarget, matchID string, cardState CardState, inputHash string, mode RunMode) (Run, error) {
 	column, targetID := "template_id", string(target.Template)
 	if target.CardSet != "" {
 		column, targetID = "card_set_id", target.CardSet
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT id FROM generation_runs WHERE `+column+` = ? AND match_id = ? AND card_state = ? AND input_hash = ? AND mode = 'normal' AND state IN ('queued', 'running') ORDER BY created_at LIMIT 1`, targetID, matchID, cardState, inputHash)
+	row := s.db.QueryRowContext(ctx, `SELECT id FROM generation_runs WHERE `+column+` = ? AND match_id = ? AND card_state = ? AND input_hash = ? AND mode = ? AND state IN ('queued', 'running') ORDER BY created_at LIMIT 1`, targetID, matchID, cardState, inputHash, mode)
 	var id string
 	if err := row.Scan(&id); err != nil {
 		if err == sql.ErrNoRows {

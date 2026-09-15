@@ -55,11 +55,11 @@ func (m *SQLModule) StartRun(ctx context.Context, request StartRequest) (Run, er
 		if resultErr == nil && !m.isStale(template, result) {
 			return Run{ID: "current-" + fmt.Sprint(result.Version), Target: request.Target, MatchID: request.MatchID, CardState: request.CardState, NormalizedInputs: inputs, State: Succeeded, ResultVersion: result.Version}, nil
 		}
-		if active, err := m.store.FindActiveRun(ctx, request.Target, request.MatchID, request.CardState, hash); err == nil {
-			return active, nil
-		} else if err != ErrNotFound {
-			return Run{}, err
-		}
+	}
+	if active, err := m.store.FindActiveRun(ctx, request.Target, request.MatchID, request.CardState, hash, request.Mode); err == nil {
+		return active, nil
+	} else if err != ErrNotFound {
+		return Run{}, err
 	}
 	run := newSQLRun(request, inputs, "", m.clock.Now())
 	if resultErr == nil {
@@ -81,12 +81,10 @@ func (m *SQLModule) startCardSet(ctx context.Context, request StartRequest) (Run
 	if err != nil {
 		return Run{}, err
 	}
-	if request.Mode == Normal {
-		if active, err := m.store.FindActiveRun(ctx, request.Target, request.MatchID, request.CardState, parentHash); err == nil {
-			return active, nil
-		} else if err != ErrNotFound {
-			return Run{}, err
-		}
+	if active, err := m.store.FindActiveRun(ctx, request.Target, request.MatchID, request.CardState, parentHash, request.Mode); err == nil {
+		return active, nil
+	} else if err != ErrNotFound {
+		return Run{}, err
 	}
 	type childPreparation struct {
 		template      Template

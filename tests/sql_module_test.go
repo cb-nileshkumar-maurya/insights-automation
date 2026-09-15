@@ -119,6 +119,22 @@ func TestSQLModuleRegenerationCreatesNextResultVersion(t *testing.T) {
 	}
 }
 
+func TestSQLModuleJoinsConcurrentRegenerations(t *testing.T) {
+	harness := newGenerationHarness(t, &ScriptedCricketData{Responses: map[TemplateID]GeneratedData{H2HRecord: {SampleSize: 3}}})
+	request := StartRequest{Target: CardTarget{Template: H2HRecord}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"team_a": "india", "team_b": "australia", "format": "t20"}}
+	harness.startAndProcess(t, request)
+	request.Mode = Regeneration
+	request.Caller = Caller{Role: Editor}
+	first, err := harness.module.StartRun(harness.ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := harness.module.StartRun(harness.ctx, request)
+	if err != nil || second.ID != first.ID {
+		t.Fatalf("first=%#v second=%#v err=%v", first, second, err)
+	}
+}
+
 func TestSQLModuleRetainsStaleResultWithoutReturningItAsCurrent(t *testing.T) {
 	ctx, store := context.Background(), openWorkerTestStore(t)
 	now := ParseTime("2026-09-08T10:00:00Z")
