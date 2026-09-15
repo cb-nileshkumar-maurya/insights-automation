@@ -40,8 +40,8 @@ const (
 )
 
 type CardTarget struct {
-	Template TemplateID
-	CardSet  string
+	Template TemplateID `json:"template"`
+	CardSet  string     `json:"card_set"`
 }
 
 type StartRequest struct {
@@ -109,6 +109,15 @@ type Result struct {
 	Envelope ResultEnvelope
 	Data     map[string]any
 	Version  int
+}
+
+// LocatedResult is the public state of one result locator.
+type LocatedResult struct {
+	ResultStatus struct {
+		Status RunState `json:"status"`
+	} `json:"result_status"`
+	Result  *Result     `json:"result,omitempty"`
+	Failure *RunFailure `json:"failure,omitempty"`
 }
 
 type GeneratedData struct {

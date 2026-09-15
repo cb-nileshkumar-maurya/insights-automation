@@ -107,8 +107,7 @@ func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("POST /v1/runs", s.submitRun)
-	mux.HandleFunc("GET /v1/runs/{id}", s.getRun)
-	mux.HandleFunc("GET /v1/results", s.getCurrentResult)
+	mux.HandleFunc("GET /v1/results/{locator}", s.getResult)
 	return mux
 }
 
@@ -153,37 +152,27 @@ func (s *Service) submitRun(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
-	slog.Info("generation run accepted", "run_id", run.ID, "parent_run_id", run.ParentID, "template", submitted.Target.Template, "card_set", submitted.Target.CardSet, "match_id", submitted.MatchID, "card_state", submitted.CardState, "mode", run.Mode, "role", role)
-	writeJSON(writer, http.StatusAccepted, run)
-}
-
-func (s *Service) getRun(writer http.ResponseWriter, request *http.Request) {
-	run, err := s.module.GetRun(request.Context(), request.PathValue("id"))
-	if errors.Is(err, generation.ErrNotFound) {
-		writeError(writer, http.StatusNotFound, "generation run not found")
-		return
-	}
+	locators, err := s.module.ResultLocators(run)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusOK, run)
-}
-
-func (s *Service) getCurrentResult(writer http.ResponseWriter, request *http.Request) {
-	query := request.URL.Query()
-	var inputs map[string]any
-	if err := json.Unmarshal([]byte(query.Get("inputs")), &inputs); err != nil {
-		writeError(writer, http.StatusBadRequest, "inputs must be a JSON object")
+	slog.Info("generation run accepted", "run_id", run.ID, "parent_run_id", run.ParentID, "template", submitted.Target.Template, "card_set", submitted.Target.CardSet, "match_id", submitted.MatchID, "card_state", submitted.CardState, "mode", run.Mode, "role", role)
+	if submitted.Target.Template != "" {
+		writeJSON(writer, http.StatusAccepted, map[string]string{"result_locator": locators[submitted.Target.Template]})
 		return
 	}
-	result, err := s.module.GetCurrentResult(request.Context(), generation.TemplateID(query.Get("template")), query.Get("match_id"), generation.CardState(query.Get("card_state")), inputs)
+	writeJSON(writer, http.StatusAccepted, map[string]map[generation.TemplateID]string{"result_locators": locators})
+}
+
+func (s *Service) getResult(writer http.ResponseWriter, request *http.Request) {
+	result, err := s.module.GetResult(request.Context(), request.PathValue("locator"))
 	if errors.Is(err, generation.ErrNotFound) {
-		writeError(writer, http.StatusNotFound, "current generated card not found")
+		writeError(writer, http.StatusNotFound, "result locator not found")
 		return
 	}
 	if err != nil {
-		writeError(writer, http.StatusBadRequest, err.Error())
+		writeError(writer, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(writer, http.StatusOK, result)

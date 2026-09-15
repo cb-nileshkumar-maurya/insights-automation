@@ -66,11 +66,23 @@ func TestSQLModuleKeepsCurrentResultAfterModuleRestart(t *testing.T) {
 	if err != nil || result.Version != 1 || result.Data["wins"] != float64(3) {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
+	locators, err := freshModule.ResultLocators(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	located, err := freshModule.GetResult(ctx, locators[H2HRecord])
+	if err != nil || located.ResultStatus.Status != Succeeded || located.Result == nil || located.Result.Version != 1 {
+		t.Fatalf("located=%#v err=%v", located, err)
+	}
 	request.Mode = Regeneration
 	request.Caller = Caller{Role: Editor}
 	failedRun, err := freshModule.StartRun(ctx, request)
 	if err != nil {
 		t.Fatal(err)
+	}
+	located, err = freshModule.GetResult(ctx, locators[H2HRecord])
+	if err != nil || located.ResultStatus.Status != Succeeded || located.Result == nil || located.Result.Version != 1 {
+		t.Fatalf("located during regeneration=%#v err=%v", located, err)
 	}
 	failingWorker := NewSQLWorker(store, &ScriptedCricketData{Responses: map[TemplateID]GeneratedData{H2HRecord: {Err: &RunFailure{Kind: ConfigurationFailure, Message: "invalid template"}}}}, config, "failing-worker")
 	if claimed, err := failingWorker.ProcessOne(ctx); err != nil || !claimed {
@@ -83,6 +95,10 @@ func TestSQLModuleKeepsCurrentResultAfterModuleRestart(t *testing.T) {
 	current, err := freshModule.GetCurrentResult(ctx, H2HRecord, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil || current.Version != 1 {
 		t.Fatalf("current=%#v err=%v", current, err)
+	}
+	located, err = freshModule.GetResult(ctx, locators[H2HRecord])
+	if err != nil || located.ResultStatus.Status != Succeeded || located.Result == nil || located.Result.Version != 1 || located.Failure != nil {
+		t.Fatalf("located after failed regeneration=%#v err=%v", located, err)
 	}
 }
 

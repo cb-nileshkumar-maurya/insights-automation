@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -135,6 +136,59 @@ func (m *SQLModule) startCardSet(ctx context.Context, request StartRequest) (Run
 func (m *SQLModule) GetRun(ctx context.Context, id string) (Run, error) {
 	return m.store.LoadRun(ctx, id)
 }
+
+func (m *SQLModule) ResultLocators(run Run) (map[TemplateID]string, error) {
+	if run.Target.Template != "" {
+		locator, err := m.resultLocator(run.Target.Template, run.MatchID, run.CardState, run.NormalizedInputs)
+		if err != nil {
+			return nil, err
+		}
+		return map[TemplateID]string{run.Target.Template: locator}, nil
+	}
+	templates, ok := m.config.CardSets[run.Target.CardSet]
+	if !ok {
+		return nil, ErrInvalidRequest
+	}
+	locators := make(map[TemplateID]string, len(templates))
+	for _, templateID := range templates {
+		inputs, err := validate(m.config.Templates[templateID], inputsForTemplate(m.config.Templates[templateID], run.NormalizedInputs))
+		if err != nil {
+			return nil, err
+		}
+		locator, err := m.resultLocator(templateID, run.MatchID, run.CardState, inputs)
+		if err != nil {
+			return nil, err
+		}
+		locators[templateID] = locator
+	}
+	return locators, nil
+}
+
+func (m *SQLModule) GetResult(ctx context.Context, locator string) (LocatedResult, error) {
+	if result, err := m.store.LoadCurrentResultByLocator(ctx, locator); err == nil {
+		located := LocatedResult{Result: &result}
+		located.ResultStatus.Status = Succeeded
+		return located, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return LocatedResult{}, err
+	}
+	run, err := m.store.LoadLatestRunByLocator(ctx, locator)
+	if err != nil {
+		return LocatedResult{}, err
+	}
+	located := LocatedResult{Failure: run.Failure}
+	located.ResultStatus.Status = run.State
+	return located, nil
+}
+
+func (m *SQLModule) resultLocator(templateID TemplateID, matchID string, cardState CardState, inputs map[string]any) (string, error) {
+	template, ok := m.config.Templates[templateID]
+	if !ok {
+		return "", ErrInvalidRequest
+	}
+	return InputHash(templateID, template.Version, matchID, cardState, inputs)
+}
+
 func (m *SQLModule) GetCurrentResult(ctx context.Context, templateID TemplateID, matchID string, cardState CardState, inputs map[string]any) (Result, error) {
 	template, ok := m.config.Templates[templateID]
 	if !ok {

@@ -296,6 +296,49 @@ WHERE c.template_id = ? AND c.template_version = ? AND c.match_id = ?
 	return result, nil
 }
 
+func (s *SQLRunStore) LoadCurrentResultByLocator(ctx context.Context, locator string) (Result, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT c.template_id, c.template_version, r.result_version, r.normalized_inputs,
+  r.source_data_window, r.sample_size, r.fallbacks, r.result_data, r.generated_at
+FROM current_generation_results c
+JOIN generation_results r ON r.id = c.generation_result_id
+WHERE c.input_hash = ?`, locator)
+	var result Result
+	var template, templateVersion string
+	var filters, fallbacks, data []byte
+	if err := row.Scan(&template, &templateVersion, &result.Version, &filters, &result.Envelope.SourceDataWindow, &result.Envelope.SampleSize, &fallbacks, &data, &result.Envelope.GeneratedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return Result{}, ErrNotFound
+		}
+		return Result{}, fmt.Errorf("load current result by locator: %w", err)
+	}
+	if err := json.Unmarshal(filters, &result.Envelope.NormalizedFilters); err != nil {
+		return Result{}, fmt.Errorf("decode normalized filters: %w", err)
+	}
+	if err := json.Unmarshal(fallbacks, &result.Envelope.Fallbacks); err != nil {
+		return Result{}, fmt.Errorf("decode fallbacks: %w", err)
+	}
+	if err := json.Unmarshal(data, &result.Data); err != nil {
+		return Result{}, fmt.Errorf("decode result data: %w", err)
+	}
+	result.Envelope.Template = TemplateID(template)
+	result.Envelope.TemplateVersion = templateVersion
+	result.Envelope.ResultVersion = result.Version
+	return result, nil
+}
+
+func (s *SQLRunStore) LoadLatestRunByLocator(ctx context.Context, locator string) (Run, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id FROM generation_runs WHERE template_id IS NOT NULL AND input_hash = ? ORDER BY created_at DESC LIMIT 1`, locator)
+	var id string
+	if err := row.Scan(&id); err != nil {
+		if err == sql.ErrNoRows {
+			return Run{}, ErrNotFound
+		}
+		return Run{}, fmt.Errorf("load latest generation run by locator: %w", err)
+	}
+	return s.LoadRun(ctx, id)
+}
+
 // ClaimNext leases one queued child run. Manual regenerations sort before normal
 // work through the persisted priority column, but all work uses the same lease.
 func (s *SQLRunStore) ClaimNext(ctx context.Context, workerID string, now time.Time) (Run, bool, error) {
