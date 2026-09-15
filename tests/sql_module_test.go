@@ -102,6 +102,23 @@ func TestSQLModuleKeepsCurrentResultAfterModuleRestart(t *testing.T) {
 	}
 }
 
+func TestSQLModuleRegenerationCreatesNextResultVersion(t *testing.T) {
+	harness := newGenerationHarness(t, &ScriptedCricketData{Responses: map[TemplateID]GeneratedData{H2HRecord: {Data: map[string]any{"wins": 3}, SampleSize: 3}}})
+	request := StartRequest{Target: CardTarget{Template: H2HRecord}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"team_a": "india", "team_b": "australia", "format": "t20"}}
+	harness.startAndProcess(t, request)
+	request.Mode = Regeneration
+	request.Caller = Caller{Role: Editor}
+	regeneration := harness.startAndProcess(t, request)
+	stored, err := harness.module.GetRun(harness.ctx, regeneration.ID)
+	if err != nil || stored.ResultVersion != 2 {
+		t.Fatalf("regeneration=%#v err=%v", stored, err)
+	}
+	result, err := harness.module.GetCurrentResult(harness.ctx, H2HRecord, "m-1", PreToss, request.Inputs)
+	if err != nil || result.Version != 2 {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
 func TestSQLModuleRetainsStaleResultWithoutReturningItAsCurrent(t *testing.T) {
 	ctx, store := context.Background(), openWorkerTestStore(t)
 	now := ParseTime("2026-09-08T10:00:00Z")
