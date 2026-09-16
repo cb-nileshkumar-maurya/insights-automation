@@ -99,7 +99,7 @@ func runtimeConfig(ctx context.Context) (app.Config, interface{ Close() error },
 		replica.Close()
 		return app.Config{}, nil, err
 	}
-	return app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.MariaDB, DSN: writeDSN}, Data: data, RoleResolver: resolver, Ready: replica.PingContext}, replica, nil
+	return app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.MariaDB, DSN: writeDSN}, Data: data, MatchContext: generation.NewMariaDBMatchContextResolver(replica), RoleResolver: resolver, Ready: replica.PingContext}, replica, nil
 }
 
 func localConfig(ctx context.Context, path string, openReplica func(context.Context) (*sql.DB, error)) (app.Config, interface{ Close() error }, error) {
@@ -111,7 +111,7 @@ func localConfig(ctx context.Context, path string, openReplica func(context.Cont
 	if err != nil {
 		return app.Config{}, nil, err
 	}
-	config.Data, config.Ready = dataForReplica(replica), replica.PingContext
+	config.Data, config.MatchContext, config.Ready = dataForReplica(replica), generation.NewMariaDBMatchContextResolver(replica), replica.PingContext
 	return config, replica, nil
 }
 

@@ -26,6 +26,10 @@ func (g *Last5GamesGenerator) Generate(ctx context.Context, query GenerationQuer
 	if err != nil {
 		return invalidH2H(err)
 	}
+	playerContext, err := playerContext(query.Inputs["player_context"])
+	if err != nil {
+		return invalidH2H(err)
+	}
 	format, err := formatID(query.Inputs)
 	if err != nil {
 		return invalidH2H(err)
@@ -42,7 +46,8 @@ func (g *Last5GamesGenerator) Generate(ctx context.Context, query GenerationQuer
 		if len(playerGames) < latest {
 			fallbacks = append(fallbacks, "player_available_history")
 		}
-		entries = append(entries, map[string]any{"player": player, "games": playerGames, "career_comparison": careers[player], "form_arrow": formArrow(playerGames, careers[player]), "available_history": len(playerGames), "insufficient_sample": len(playerGames) == 0})
+		identity := playerContext[player]
+		entries = append(entries, map[string]any{"player_id": player, "team_id": identity.TeamID, "player_name": identity.FullName, "games": playerGames, "career_comparison": careers[player], "form_arrow": formArrow(playerGames, careers[player]), "available_history": len(playerGames), "insufficient_sample": len(playerGames) == 0})
 	}
 	return GeneratedData{Data: map[string]any{"players": entries}, SampleSize: sample, Fallbacks: fallbacks, SourceDataWindow: "latest games"}
 }

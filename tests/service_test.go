@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,12 +15,34 @@ import (
 	"github.com/cricbuzz/insights-automation/generation"
 )
 
+type fixedMatchContext struct {
+	context generation.MatchContext
+	err     error
+}
+
+func (source fixedMatchContext) ResolveMatchContext(context.Context, string) (generation.MatchContext, error) {
+	return source.context, source.err
+}
+
+func testMatchContext() fixedMatchContext {
+	return fixedMatchContext{context: generation.MatchContext{TeamA: 1, TeamB: 2, Format: "t20", Venue: 4, Players: []generation.MatchPlayer{{ID: 3, TeamID: 1, FullName: "Player 3"}}}}
+}
+
+func testPlayerContext(ids ...int) map[string]any {
+	context := make(map[string]any, len(ids))
+	for _, id := range ids {
+		context[fmt.Sprint(id)] = map[string]any{"team_id": 1, "player_name": fmt.Sprintf("Player %d", id)}
+	}
+	return context
+}
+
 func TestLocalServiceStartsAndServesGeneratedCards(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	service, err := app.New(ctx, app.Config{
 		WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: filepath.Join(t.TempDir(), "generation.db")},
 		Data:          &generation.ScriptedCricketData{Responses: map[generation.TemplateID]generation.GeneratedData{generation.H2HRecord: {Data: map[string]any{"wins": 3}, SampleSize: 3, SourceDataWindow: "2024-01-01..2026-01-01"}}},
+		MatchContext:  testMatchContext(),
 		WorkerPoll:    time.Millisecond,
 	})
 	if err != nil {
@@ -36,7 +59,7 @@ func TestLocalServiceStartsAndServesGeneratedCards(t *testing.T) {
 	}
 	response.Body.Close()
 
-	body := []byte(`{"target":{"template":"h2h_record"},"match_id":"m-1","card_state":"pre_toss","inputs":{"team_a":"1","team_b":"2","format":"t20","latest_matches":10},"role":"editor"}`)
+	body := []byte(`{"target":{"template":"h2h_record"},"match_id":"m-1","card_state":"pre_toss","inputs":{"latest_matches":10},"role":"editor"}`)
 	response, err = http.Post(server.URL+"/v1/runs", "application/json", bytes.NewReader(body))
 	if err != nil || response.StatusCode != http.StatusAccepted {
 		t.Fatalf("submit status=%v err=%v", response, err)
@@ -76,7 +99,7 @@ func TestLocalServiceStartsAndServesGeneratedCards(t *testing.T) {
 func TestLocalServiceMakesMissingHistoricalSourceVisible(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	service, err := app.New(ctx, app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: filepath.Join(t.TempDir(), "generation.db")}, WorkerPoll: time.Millisecond})
+	service, err := app.New(ctx, app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: filepath.Join(t.TempDir(), "generation.db")}, MatchContext: testMatchContext(), WorkerPoll: time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +107,7 @@ func TestLocalServiceMakesMissingHistoricalSourceVisible(t *testing.T) {
 	go service.Run(ctx)
 	server := httptest.NewServer(service.Handler())
 	defer server.Close()
-	response, err := http.Post(server.URL+"/v1/runs", "application/json", bytes.NewBufferString(`{"target":{"template":"h2h_record"},"match_id":"m-1","card_state":"pre_toss","inputs":{"team_a":"1","team_b":"2","format":"t20"}}`))
+	response, err := http.Post(server.URL+"/v1/runs", "application/json", bytes.NewBufferString(`{"target":{"template":"h2h_record"},"match_id":"m-1","card_state":"pre_toss"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +149,7 @@ func TestLocalServiceMakesMissingHistoricalSourceVisible(t *testing.T) {
 
 func TestServiceReturnsOneLocatorPerCardSetTemplate(t *testing.T) {
 	ctx := context.Background()
-	service, err := app.New(ctx, app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: filepath.Join(t.TempDir(), "generation.db")}})
+	service, err := app.New(ctx, app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: filepath.Join(t.TempDir(), "generation.db")}, MatchContext: testMatchContext()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +157,7 @@ func TestServiceReturnsOneLocatorPerCardSetTemplate(t *testing.T) {
 	server := httptest.NewServer(service.Handler())
 	defer server.Close()
 
-	response, err := http.Post(server.URL+"/v1/runs", "application/json", bytes.NewBufferString(`{"target":{"card_set":"pre_toss_v1"},"match_id":"m-1","card_state":"pre_toss","inputs":{"team_a":"1","team_b":"2","players":["3"],"venue":"4","format":"t20"}}`))
+	response, err := http.Post(server.URL+"/v1/runs", "application/json", bytes.NewBufferString(`{"target":{"card_set":"pre_toss_v1"},"match_id":"m-1","card_state":"pre_toss"}`))
 	if err != nil || response.StatusCode != http.StatusAccepted {
 		t.Fatalf("submit status=%v err=%v", response, err)
 	}
@@ -163,4 +186,113 @@ func TestServiceReturnsNotFoundForUnknownResultLocator(t *testing.T) {
 		t.Fatalf("response=%v err=%v", response, err)
 	}
 	response.Body.Close()
+}
+
+func TestServiceRejectsClientSuppliedMatchContext(t *testing.T) {
+	service, err := app.New(context.Background(), app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: filepath.Join(t.TempDir(), "generation.db")}, MatchContext: testMatchContext()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+
+	response, err := http.Post(server.URL+"/v1/runs", "application/json", bytes.NewBufferString(`{"target":{"template":"h2h_record"},"match_id":"m-1","card_state":"pre_toss","inputs":{"team_a":"99"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d", response.StatusCode)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error != "team_a is derived from match_id and must not be supplied" {
+		t.Fatalf("error=%q", body.Error)
+	}
+}
+
+func TestServiceUsesTheMatchSquadForEmptyPlayerSelection(t *testing.T) {
+	service, err := app.New(context.Background(), app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: filepath.Join(t.TempDir(), "generation.db")}, MatchContext: testMatchContext()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+
+	locator := func(body string) string {
+		response, err := http.Post(server.URL+"/v1/runs", "application/json", bytes.NewBufferString(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusAccepted {
+			t.Fatalf("status=%d", response.StatusCode)
+		}
+		var submitted struct {
+			ResultLocator string `json:"result_locator"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&submitted); err != nil {
+			t.Fatal(err)
+		}
+		return submitted.ResultLocator
+	}
+
+	omitted := locator(`{"target":{"template":"last_5_games"},"match_id":"m-1","card_state":"pre_toss"}`)
+	empty := locator(`{"target":{"template":"last_5_games"},"match_id":"m-1","card_state":"pre_toss","inputs":{"players":[]}}`)
+	if omitted != empty {
+		t.Fatalf("omitted=%q empty=%q", omitted, empty)
+	}
+}
+
+func TestServiceRejectsPlayerOutsideMatchSquad(t *testing.T) {
+	service, err := app.New(context.Background(), app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: filepath.Join(t.TempDir(), "generation.db")}, MatchContext: testMatchContext()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+
+	response, err := http.Post(server.URL+"/v1/runs", "application/json", bytes.NewBufferString(`{"target":{"template":"last_5_games"},"match_id":"m-1","card_state":"pre_toss","inputs":{"players":["9"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d", response.StatusCode)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error != "player 9 is not in match squad for match_id m-1" {
+		t.Fatalf("error=%q", body.Error)
+	}
+}
+
+func TestServiceReturnsUnavailableWhenMatchContextCannotBeRead(t *testing.T) {
+	service, err := app.New(context.Background(), app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: filepath.Join(t.TempDir(), "generation.db")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+
+	response, err := http.Post(server.URL+"/v1/runs", "application/json", bytes.NewBufferString(`{"target":{"template":"h2h_record"},"match_id":"m-1","card_state":"pre_toss"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d", response.StatusCode)
+	}
 }

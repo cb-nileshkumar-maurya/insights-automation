@@ -15,8 +15,10 @@ Submit an approved normal request:
 ```bash
 curl -X POST http://localhost:8080/v1/runs \
   -H 'Content-Type: application/json' \
-  -d '{"target":{"template":"h2h_record"},"match_id":"m-1","card_state":"pre_toss","inputs":{"team_a":"1","team_b":"2","format":"t20"}}'
+  -d '{"target":{"template":"h2h_record"},"match_id":"154638","card_state":"pre_toss","inputs":{"latest_matches":10}}'
 ```
+
+`match_id` supplies the teams, supported format, and—where a template needs it—venue. Do not submit `team_a`, `team_b`, `format`, or `venue`. Player cards use the full recorded match squad unless `inputs.players` supplies a non-empty subset of that squad.
 
 The submission returns a stable `result_locator`. Poll it instead of rebuilding filters in a URL or polling a run ID:
 

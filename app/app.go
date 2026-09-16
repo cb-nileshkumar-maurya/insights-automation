@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ type Config struct {
 	WriteDatabase generation.DatabaseConfig
 	Data          generation.CricketData
 	Eligible      generation.EligibleMatchSource
+	MatchContext  generation.MatchContextResolver
 	RoleResolver  RoleResolver
 	WorkerPoll    time.Duration
 	WorkerID      string
@@ -32,6 +35,7 @@ type Service struct {
 	workerPoll   time.Duration
 	roleResolver RoleResolver
 	ready        func(context.Context) error
+	matchContext generation.MatchContextResolver
 }
 
 // RoleResolver is the command's authentication boundary. Production callers
@@ -70,6 +74,9 @@ func New(ctx context.Context, config Config) (*Service, error) {
 		// and squad population source is deployment-specific.
 		config.Eligible = emptyEligibleMatches{}
 	}
+	if config.MatchContext == nil {
+		config.MatchContext = unavailableMatchContext{}
+	}
 	externalReady := config.Ready
 	config.Ready = func(readyContext context.Context) error {
 		if err := store.Ping(readyContext); err != nil {
@@ -81,7 +88,7 @@ func New(ctx context.Context, config Config) (*Service, error) {
 		return nil
 	}
 	slog.Info("insights automation initialized", "write_dialect", config.WriteDatabase.Dialect, "historical_source_configured", historicalSourceConfigured, "worker_id", config.WorkerID)
-	return &Service{store: store, module: module, worker: generation.NewSQLWorker(store, config.Data, generation.DefaultConfiguration(), config.WorkerID), reconciler: generation.NewReconciler(config.Eligible, module, "pre_toss_v1"), workerPoll: config.WorkerPoll, roleResolver: config.RoleResolver, ready: config.Ready}, nil
+	return &Service{store: store, module: module, worker: generation.NewSQLWorker(store, config.Data, generation.DefaultConfiguration(), config.WorkerID), reconciler: generation.NewReconciler(config.Eligible, module, "pre_toss_v1"), workerPoll: config.WorkerPoll, roleResolver: config.RoleResolver, ready: config.Ready, matchContext: config.MatchContext}, nil
 }
 
 func (s *Service) Close() error { return s.store.Close() }
@@ -128,6 +135,8 @@ type submitRequest struct {
 	Mode      generation.RunMode    `json:"mode"`
 }
 
+type requestError struct{ error }
+
 func (s *Service) submitRun(writer http.ResponseWriter, request *http.Request) {
 	var submitted submitRequest
 	decoder := json.NewDecoder(request.Body)
@@ -143,7 +152,16 @@ func (s *Service) submitRun(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusForbidden, "caller is not authorized")
 		return
 	}
-	run, err := s.module.StartRun(request.Context(), generation.StartRequest{Target: submitted.Target, MatchID: submitted.MatchID, CardState: submitted.CardState, Inputs: submitted.Inputs, Caller: generation.Caller{Role: role}, Mode: submitted.Mode})
+	inputs, err := s.resolvedInputs(request.Context(), submitted)
+	if err != nil {
+		status := http.StatusBadRequest
+		if !isRequestError(err) {
+			status = http.StatusServiceUnavailable
+		}
+		writeError(writer, status, err.Error())
+		return
+	}
+	run, err := s.module.StartRun(request.Context(), generation.StartRequest{Target: submitted.Target, MatchID: submitted.MatchID, CardState: submitted.CardState, Inputs: inputs, Caller: generation.Caller{Role: role}, Mode: submitted.Mode})
 	if errors.Is(err, generation.ErrUnauthorized) {
 		slog.Warn("generation run rejected", "reason", "unauthorized_regeneration", "template", submitted.Target.Template, "card_set", submitted.Target.CardSet, "match_id", submitted.MatchID)
 		writeError(writer, http.StatusForbidden, err.Error())
@@ -165,6 +183,152 @@ func (s *Service) submitRun(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(writer, http.StatusAccepted, map[string]map[generation.TemplateID]string{"result_locators": locators})
+}
+
+func (s *Service) resolvedInputs(ctx context.Context, submitted submitRequest) (map[string]any, error) {
+	for _, key := range []string{"team_a", "team_b", "format", "venue", "player_context"} {
+		if _, ok := submitted.Inputs[key]; ok {
+			return nil, invalidRequestf("%s is derived from match_id and must not be supplied", key)
+		}
+	}
+	templates, ok := targetTemplates(submitted.Target)
+	if !ok {
+		return nil, generation.ErrInvalidRequest
+	}
+	context, err := s.matchContext.ResolveMatchContext(ctx, submitted.MatchID)
+	if err != nil {
+		return nil, err
+	}
+	inputs := make(map[string]any, len(submitted.Inputs)+5)
+	for key, value := range submitted.Inputs {
+		inputs[key] = value
+	}
+	needsVenue, needsPlayers := false, false
+	for _, template := range templates {
+		if _, ok := template.Allowed["team_a"]; ok {
+			inputs["team_a"] = strconv.Itoa(context.TeamA)
+		}
+		if _, ok := template.Allowed["team_b"]; ok {
+			inputs["team_b"] = strconv.Itoa(context.TeamB)
+		}
+		if _, ok := template.Allowed["format"]; ok {
+			inputs["format"] = context.Format
+		}
+		needsVenue = needsVenue || template.ID == generation.VenueDNA || template.ID == generation.PlayerStatsAtVenue
+		needsPlayers = needsPlayers || template.ID == generation.PlayerStatsAtVenue || template.ID == generation.Last5Games
+	}
+	if needsVenue {
+		if context.Venue <= 0 {
+			return nil, invalidRequestf("venue is unavailable for match_id %s", submitted.MatchID)
+		}
+		inputs["venue"] = strconv.Itoa(context.Venue)
+	}
+	if needsPlayers {
+		players, details, err := selectedPlayers(submitted.MatchID, submitted.Inputs["players"], context.Players)
+		if err != nil {
+			return nil, err
+		}
+		inputs["players"], inputs["player_context"] = players, details
+	}
+	return inputs, nil
+}
+
+func targetTemplates(target generation.CardTarget) ([]generation.Template, bool) {
+	config := generation.DefaultConfiguration()
+	if target.Template != "" && target.CardSet != "" {
+		return nil, false
+	}
+	if target.Template != "" {
+		template, ok := config.Templates[target.Template]
+		return []generation.Template{template}, ok
+	}
+	ids, ok := config.CardSets[target.CardSet]
+	if !ok {
+		return nil, false
+	}
+	templates := make([]generation.Template, 0, len(ids))
+	for _, id := range ids {
+		templates = append(templates, config.Templates[id])
+	}
+	return templates, true
+}
+
+func selectedPlayers(matchID string, supplied any, squad []generation.MatchPlayer) ([]string, map[string]any, error) {
+	byID := make(map[string]generation.MatchPlayer, len(squad))
+	for _, player := range squad {
+		byID[strconv.Itoa(player.ID)] = player
+	}
+	if len(byID) == 0 {
+		return nil, nil, invalidRequestf("match squad is unavailable for match_id %s", matchID)
+	}
+	requested, err := requestedPlayerIDs(supplied)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(requested) == 0 {
+		for id := range byID {
+			requested = append(requested, id)
+		}
+	}
+	sort.Strings(requested)
+	requested = uniqueStrings(requested)
+	details := make(map[string]any, len(requested))
+	for _, id := range requested {
+		player, ok := byID[id]
+		if !ok {
+			return nil, nil, invalidRequestf("player %s is not in match squad for match_id %s", id, matchID)
+		}
+		details[id] = map[string]any{"team_id": player.TeamID, "player_name": player.FullName}
+	}
+	return requested, details, nil
+}
+
+func requestedPlayerIDs(value any) ([]string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	values, ok := value.([]any)
+	if !ok {
+		if strings, ok := value.([]string); ok {
+			values = make([]any, len(strings))
+			for index := range strings {
+				values[index] = strings[index]
+			}
+		} else {
+			return nil, invalidRequestf("players must be a stable ID list")
+		}
+	}
+	ids := make([]string, 0, len(values))
+	for _, value := range values {
+		id, err := strconv.Atoi(fmt.Sprint(value))
+		if err != nil || id <= 0 {
+			return nil, invalidRequestf("players must be a stable ID list")
+		}
+		ids = append(ids, strconv.Itoa(id))
+	}
+	return ids, nil
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+	result := values[:1]
+	for _, value := range values[1:] {
+		if value != result[len(result)-1] {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func isRequestError(err error) bool {
+	var request requestError
+	return errors.As(err, &request) || errors.Is(err, generation.ErrInvalidRequest) || errors.Is(err, generation.ErrMatchNotFound) || errors.Is(err, generation.ErrUnsupportedMatchType)
+}
+
+func invalidRequestf(format string, values ...any) error {
+	return requestError{fmt.Errorf(format, values...)}
 }
 
 func (s *Service) getResult(writer http.ResponseWriter, request *http.Request) {
@@ -202,6 +366,12 @@ func writeError(writer http.ResponseWriter, status int, message string) {
 }
 
 type unavailableData struct{}
+
+type unavailableMatchContext struct{}
+
+func (unavailableMatchContext) ResolveMatchContext(context.Context, string) (generation.MatchContext, error) {
+	return generation.MatchContext{}, generation.ErrHistoricalUnavailable
+}
 
 func (unavailableData) Generate(_ context.Context, query generation.GenerationQuery) generation.GeneratedData {
 	slog.Warn("historical source is not configured", "template", query.Template, "match_id", query.MatchID, "action", "set production mode and replica configuration")

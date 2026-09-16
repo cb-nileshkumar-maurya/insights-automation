@@ -26,6 +26,10 @@ func (g *PlayerVenueGenerator) Generate(ctx context.Context, query GenerationQue
 	if err != nil {
 		return invalidH2H(err)
 	}
+	playerContext, err := playerContext(query.Inputs["player_context"])
+	if err != nil {
+		return invalidH2H(err)
+	}
 	venue, err := inputID(query.Inputs, "venue")
 	if err != nil {
 		return invalidH2H(err)
@@ -63,9 +67,38 @@ func (g *PlayerVenueGenerator) Generate(ctx context.Context, query GenerationQue
 		if bowlFallback {
 			fallbacks = append(fallbacks, fmt.Sprintf("player_%d_bowling_career", player))
 		}
-		entries = append(entries, map[string]any{"player": player, "batting": bat, "bowling": bowl, "batting_fallback": batFallback, "bowling_fallback": bowlFallback})
+		identity := playerContext[player]
+		entries = append(entries, map[string]any{"player_id": player, "team_id": identity.TeamID, "player_name": identity.FullName, "batting": bat, "bowling": bowl, "batting_fallback": batFallback, "bowling_fallback": bowlFallback})
 	}
 	return GeneratedData{Data: map[string]any{"players": entries}, SampleSize: sample, Fallbacks: fallbacks, SourceDataWindow: window}
+}
+
+func playerContext(raw any) (map[int]MatchPlayer, error) {
+	values, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("player_context is required")
+	}
+	players := make(map[int]MatchPlayer, len(values))
+	for id, rawPlayer := range values {
+		playerID, err := inputID(map[string]any{"player": id}, "player")
+		if err != nil {
+			return nil, err
+		}
+		value, ok := rawPlayer.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("player_context must contain player details")
+		}
+		teamID, err := inputID(value, "team_id")
+		if err != nil {
+			return nil, err
+		}
+		name, ok := value["player_name"].(string)
+		if !ok || name == "" {
+			return nil, fmt.Errorf("player_name is required")
+		}
+		players[playerID] = MatchPlayer{ID: playerID, TeamID: teamID, FullName: name}
+	}
+	return players, nil
 }
 func playerIDs(raw any) ([]int, error) {
 	values, ok := raw.([]string)

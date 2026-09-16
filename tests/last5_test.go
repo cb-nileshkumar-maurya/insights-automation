@@ -15,7 +15,7 @@ func (fixedLast5History) LastGames(context.Context, []int, int, int) (map[int][]
 
 func TestLast5GamesReturnsOneEntryPerPlayerFromABatchedPopulation(t *testing.T) {
 	harness := newGenerationHarness(t, NewLast5GamesGenerator(fixedLast5History{}))
-	run := harness.startAndProcess(t, StartRequest{Target: CardTarget{Template: Last5Games}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"players": []string{"1", "2"}, "format": "t20"}})
+	run := harness.startAndProcess(t, StartRequest{Target: CardTarget{Template: Last5Games}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"players": []string{"1", "2"}, "player_context": testPlayerContext(1, 2), "format": "t20"}})
 	result, err := harness.module.GetCurrentResult(harness.ctx, Last5Games, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +29,7 @@ func TestLast5GamesReturnsOneEntryPerPlayerFromABatchedPopulation(t *testing.T) 
 func TestLast5GamesMarksShortAndMissingPlayerHistory(t *testing.T) {
 	history := fixedLast5Games{games: map[int][]PlayerGame{1: {{MatchID: 10, BattingRuns: 42, BattingBalls: 31}}}, careers: map[int]PlayerCareerComparison{1: {BattingAverage: 30}}}
 	harness := newGenerationHarness(t, NewLast5GamesGenerator(history))
-	run := harness.startAndProcess(t, StartRequest{Target: CardTarget{Template: Last5Games}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"players": []string{"1", "2"}, "format": "t20", "latest_matches": 5}})
+	run := harness.startAndProcess(t, StartRequest{Target: CardTarget{Template: Last5Games}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"players": []string{"1", "2"}, "player_context": testPlayerContext(1, 2), "format": "t20", "latest_matches": 5}})
 	result, err := harness.module.GetCurrentResult(harness.ctx, Last5Games, "m-1", PreToss, run.NormalizedInputs)
 	if err != nil || result.Envelope.Fallbacks[0] != "player_available_history" {
 		t.Fatalf("result=%#v err=%v", result, err)
