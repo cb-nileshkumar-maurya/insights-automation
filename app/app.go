@@ -130,7 +130,9 @@ type submitRequest struct {
 
 func (s *Service) submitRun(writer http.ResponseWriter, request *http.Request) {
 	var submitted submitRequest
-	if err := json.NewDecoder(request.Body).Decode(&submitted); err != nil {
+	decoder := json.NewDecoder(request.Body)
+	decoder.UseNumber()
+	if err := decoder.Decode(&submitted); err != nil {
 		slog.Debug("generation run rejected", "reason", "invalid_json")
 		writeError(writer, http.StatusBadRequest, "invalid JSON request")
 		return

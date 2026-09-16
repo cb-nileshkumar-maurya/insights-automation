@@ -36,7 +36,7 @@ func TestLocalServiceStartsAndServesGeneratedCards(t *testing.T) {
 	}
 	response.Body.Close()
 
-	body := []byte(`{"target":{"template":"h2h_record"},"match_id":"m-1","card_state":"pre_toss","inputs":{"team_a":"1","team_b":"2","format":"t20"},"role":"editor"}`)
+	body := []byte(`{"target":{"template":"h2h_record"},"match_id":"m-1","card_state":"pre_toss","inputs":{"team_a":"1","team_b":"2","format":"t20","latest_matches":10},"role":"editor"}`)
 	response, err = http.Post(server.URL+"/v1/runs", "application/json", bytes.NewReader(body))
 	if err != nil || response.StatusCode != http.StatusAccepted {
 		t.Fatalf("submit status=%v err=%v", response, err)

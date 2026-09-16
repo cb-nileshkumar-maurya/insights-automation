@@ -249,6 +249,10 @@ func inputsForTemplate(template Template, inputs map[string]any) map[string]any 
 func validate(template Template, inputs map[string]any) (map[string]any, error) {
 	normalized := canonicalInputs(template.Defaults)
 	for key, value := range inputs {
+		value, err := normalizeInputJSON(value)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s must be a valid integer", ErrInvalidRequest, key)
+		}
 		allowed, known := template.Allowed[key]
 		if !known {
 			return nil, fmt.Errorf("%w: %s is not allowed", ErrInvalidRequest, key)
