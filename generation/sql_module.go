@@ -229,7 +229,7 @@ func newSQLRun(request StartRequest, inputs map[string]any, parentID string, now
 	return Run{ID: newRunID(), ParentID: parentID, Target: request.Target, MatchID: request.MatchID, CardState: request.CardState, NormalizedInputs: inputs, State: Queued, Mode: request.Mode, CreatedAt: now}
 }
 func newRunID() string {
-	bytes := make([]byte, 16)
+	bytes := make([]byte, 5)
 	if _, err := rand.Read(bytes); err != nil {
 		panic("cannot create generation run id")
 	}

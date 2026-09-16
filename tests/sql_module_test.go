@@ -119,6 +119,14 @@ func TestSQLModuleRegenerationCreatesNextResultVersion(t *testing.T) {
 	}
 }
 
+func TestSQLModuleCreatesTenCharacterRunIDs(t *testing.T) {
+	module := NewSQLModule(DefaultConfiguration(), openWorkerTestStore(t), ClockFunc(func() Time { return ParseTime("2026-09-08T10:00:00Z") }))
+	run, err := module.StartRun(context.Background(), StartRequest{Target: CardTarget{Template: H2HRecord}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"team_a": "1", "team_b": "2", "format": "t20"}})
+	if err != nil || len(run.ID) != 10 {
+		t.Fatalf("run=%#v err=%v", run, err)
+	}
+}
+
 func TestSQLModuleJoinsConcurrentRegenerations(t *testing.T) {
 	harness := newGenerationHarness(t, &ScriptedCricketData{Responses: map[TemplateID]GeneratedData{H2HRecord: {SampleSize: 3}}})
 	request := StartRequest{Target: CardTarget{Template: H2HRecord}, MatchID: "m-1", CardState: PreToss, Inputs: map[string]any{"team_a": "india", "team_b": "australia", "format": "t20"}}
