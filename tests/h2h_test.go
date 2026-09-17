@@ -9,7 +9,7 @@ import (
 
 type fixedH2HHistory []H2HMatchRecord
 
-func (history fixedH2HHistory) FindH2H(context.Context, int, int, int, *int, int) ([]H2HMatchRecord, error) {
+func (history fixedH2HHistory) FindH2H(context.Context, int, int, int, int) ([]H2HMatchRecord, error) {
 	return history, nil
 }
 
@@ -58,5 +58,11 @@ func TestH2HRecordReportsInsufficientSampleWhenNoComparableMatchExists(t *testin
 func TestH2HRecordRejectsRemovedHomeContextFilter(t *testing.T) {
 	if _, err := NewSQLModule(DefaultConfiguration(), openWorkerTestStore(t), ClockFunc(func() Time { return ParseTime("2026-09-08T10:00:00Z") })).StartRun(context.Background(), StartRequest{Target: CardTarget{Template: H2HRecord}, Inputs: map[string]any{"team_a": "1", "team_b": "2", "format": "t20", "context": "home"}}); err == nil {
 		t.Fatal("home context should not be accepted in V1")
+	}
+}
+
+func TestH2HRecordRejectsVenueFilter(t *testing.T) {
+	if _, err := NewSQLModule(DefaultConfiguration(), openWorkerTestStore(t), ClockFunc(func() Time { return ParseTime("2026-09-08T10:00:00Z") })).StartRun(context.Background(), StartRequest{Target: CardTarget{Template: H2HRecord}, Inputs: map[string]any{"team_a": "1", "team_b": "2", "format": "t20", "venue": "4"}}); err == nil {
+		t.Fatal("venue filter should not be accepted")
 	}
 }

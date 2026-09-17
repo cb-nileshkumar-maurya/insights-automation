@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	. "github.com/cricbuzz/insights-automation/generation"
@@ -54,11 +55,11 @@ func TestTeamPhaseProfilesRejectsTestFormat(t *testing.T) {
 
 func TestPhaseProfileFormatBoundaries(t *testing.T) {
 	t20 := PhasesFor("t20")
-	if len(t20) != 3 || t20[0].LastOver != 6 || t20[1].LastOver != 15 {
+	if !reflect.DeepEqual(t20, []string{"powerplay", "middle", "death"}) {
 		t.Fatalf("T20 phases=%#v", t20)
 	}
 	odi := PhasesFor("odi")
-	if len(odi) != 3 || odi[0].LastOver != 10 || odi[1].LastOver != 40 {
+	if !reflect.DeepEqual(odi, []string{"powerplay", "middle", "death"}) {
 		t.Fatalf("ODI phases=%#v", odi)
 	}
 }

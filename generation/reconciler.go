@@ -16,20 +16,17 @@ type EligibleMatch struct {
 type EligibleMatchSource interface {
 	EligibleMatches(context.Context) ([]EligibleMatch, error)
 }
-type RunStarter interface {
-	StartRun(context.Context, StartRequest) (Run, error)
-}
 
 // Reconciler submits one versioned card set per eligible match. The generation
 // module decides whether that request joins work, reuses current results, or
 // creates the missing and stale child runs.
 type Reconciler struct {
 	source  EligibleMatchSource
-	starter RunStarter
+	starter *SQLModule
 	cardSet string
 }
 
-func NewReconciler(source EligibleMatchSource, starter RunStarter, cardSet string) *Reconciler {
+func NewReconciler(source EligibleMatchSource, starter *SQLModule, cardSet string) *Reconciler {
 	return &Reconciler{source: source, starter: starter, cardSet: cardSet}
 }
 func (r *Reconciler) Reconcile(ctx context.Context) ([]Run, error) {

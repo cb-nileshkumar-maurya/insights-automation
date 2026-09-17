@@ -46,14 +46,14 @@ func (g *TeamPhaseProfilesGenerator) Generate(ctx context.Context, query Generat
 	for _, team := range []int{a, b} {
 		values := map[string]any{}
 		for _, phase := range PhasesFor(query.Inputs["format"].(string)) {
-			metric := preferred[team][phase.Name]
+			metric := preferred[team][phase]
 			fallback := false
 			if metric.Innings < phaseMinimumInnings {
-				metric, fallback = career[team][phase.Name], true
-				fallbacks = append(fallbacks, fmt.Sprintf("team_%d_%s_career", team, phase.Name))
+				metric, fallback = career[team][phase], true
+				fallbacks = append(fallbacks, fmt.Sprintf("team_%d_%s_career", team, phase))
 			}
 			sample += metric.Innings
-			values[phase.Name] = phaseOutput(metric, fallback)
+			values[phase] = phaseOutput(metric, fallback)
 		}
 		entries = append(entries, map[string]any{"team": team, "phases": values})
 	}

@@ -22,7 +22,7 @@ type H2HMatchRecord struct {
 	PlayedAt   time.Time
 }
 type H2HHistory interface {
-	FindH2H(context.Context, int, int, int, *int, int) ([]H2HMatchRecord, error)
+	FindH2H(context.Context, int, int, int, int) ([]H2HMatchRecord, error)
 }
 type H2HGenerator struct{ history H2HHistory }
 
@@ -45,16 +45,7 @@ func (g *H2HGenerator) Generate(ctx context.Context, query GenerationQuery) Gene
 		return invalidH2H(err)
 	}
 	latest := query.Inputs["latest_matches"].(int)
-	var venue *int
-	if raw, ok := query.Inputs["venue"]; ok {
-		value, err := inputID(query.Inputs, "venue")
-		if err != nil {
-			return invalidH2H(err)
-		}
-		venue = &value
-		_ = raw
-	}
-	matches, err := g.history.FindH2H(ctx, teamA, teamB, format, venue, latest)
+	matches, err := g.history.FindH2H(ctx, teamA, teamB, format, latest)
 	if err != nil {
 		return GeneratedData{Err: &RunFailure{Kind: TransientFailure, Message: err.Error()}}
 	}
@@ -136,15 +127,10 @@ func formatID(inputs map[string]any) (int, error) {
 type MariaDBH2HHistory struct{ db *sql.DB }
 
 func NewMariaDBH2HHistory(db *sql.DB) *MariaDBH2HHistory { return &MariaDBH2HHistory{db: db} }
-func (h *MariaDBH2HHistory) FindH2H(ctx context.Context, teamA, teamB, format int, venue *int, latest int) ([]H2HMatchRecord, error) {
+func (h *MariaDBH2HHistory) FindH2H(ctx context.Context, teamA, teamB, format, latest int) ([]H2HMatchRecord, error) {
 	args := []any{teamA, teamB, teamB, teamA, format}
-	venueClause := ""
-	if venue != nil {
-		venueClause = " AND m.venueid = ?"
-		args = append(args, *venue)
-	}
 	args = append(args, latest)
-	rows, err := h.db.QueryContext(ctx, `SELECT m.id, m.teama, COALESCE(team1.name, ''), m.teamb, COALESCE(team2.name, ''), COALESCE(r.winningTeamId, m.winner, 0), COALESCE(r.resultType, ''), COALESCE(r.winningMargin, 0), COALESCE(r.winByRuns, 0), m.startdt FROM krik_match_archive m LEFT JOIN krik_teams team1 ON team1.id = m.teama LEFT JOIN krik_teams team2 ON team2.id = m.teamb LEFT JOIN stats_import3_dump_matchresult_tbl r ON r.matchId = m.id WHERE ((m.teama = ? AND m.teamb = ?) OR (m.teama = ? AND m.teamb = ?)) AND m.match_type_id = ? AND m.isArchived = 1`+venueClause+` ORDER BY m.startdt DESC LIMIT ?`, args...)
+	rows, err := h.db.QueryContext(ctx, `SELECT m.id, m.teama, COALESCE(team1.name, ''), m.teamb, COALESCE(team2.name, ''), COALESCE(r.winningTeamId, m.winner, 0), COALESCE(r.resultType, ''), COALESCE(r.winningMargin, 0), COALESCE(r.winByRuns, 0), m.startdt FROM krik_match_archive m LEFT JOIN krik_teams team1 ON team1.id = m.teama LEFT JOIN krik_teams team2 ON team2.id = m.teamb LEFT JOIN stats_import3_dump_matchresult_tbl r ON r.matchId = m.id WHERE ((m.teama = ? AND m.teamb = ?) OR (m.teama = ? AND m.teamb = ?)) AND m.match_type_id = ? AND m.isArchived = 1 ORDER BY m.startdt DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
