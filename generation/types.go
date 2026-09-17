@@ -106,9 +106,10 @@ type ResultEnvelope struct {
 }
 
 type Result struct {
-	Envelope ResultEnvelope
-	Data     map[string]any
-	Version  int
+	Envelope  ResultEnvelope
+	Data      map[string]any
+	Version   int
+	NoContent bool `json:"-"`
 }
 
 // LocatedResult is the public state of one result locator.
@@ -125,6 +126,7 @@ type GeneratedData struct {
 	SampleSize       int
 	Fallbacks        []string
 	SourceDataWindow string
+	NoContent        bool
 	Err              *RunFailure
 }
 

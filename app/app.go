@@ -191,7 +191,7 @@ func (s *Service) submitRun(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Service) resolvedInputs(ctx context.Context, submitted submitRequest) (map[string]any, error) {
-	for _, key := range []string{"team_a", "team_b", "format", "venue", "player_context"} {
+	for _, key := range []string{"team_a", "team_b", "format", "venue", "host_country", "target_start", "player_context"} {
 		if _, ok := submitted.Inputs[key]; ok {
 			return nil, invalidRequestf("%s is derived from match_id and must not be supplied", key)
 		}
@@ -218,6 +218,15 @@ func (s *Service) resolvedInputs(ctx context.Context, submitted submitRequest) (
 		}
 		if _, ok := template.Allowed["format"]; ok {
 			inputs["format"] = context.Format
+		}
+		if template.ID == generation.H2HRecord {
+			inputs["target_start"] = context.Start.UTC().Format(time.RFC3339)
+			if context.Venue > 0 {
+				inputs["venue"] = context.Venue
+			}
+			if context.Country > 0 {
+				inputs["host_country"] = context.Country
+			}
 		}
 		needsVenue = needsVenue || template.ID == generation.VenueDNA || template.ID == generation.PlayerStatsAtVenue
 		needsPlayers = needsPlayers || template.ID == generation.PlayerStatsAtVenue || template.ID == generation.Last5Games
@@ -344,6 +353,10 @@ func (s *Service) getResult(writer http.ResponseWriter, request *http.Request) {
 	}
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if result.Result != nil && result.Result.NoContent {
+		writer.WriteHeader(http.StatusNoContent)
 		return
 	}
 	writeJSON(writer, http.StatusOK, result)

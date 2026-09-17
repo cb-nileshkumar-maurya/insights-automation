@@ -16,6 +16,8 @@ type SQLRunStore struct {
 	dialect DatabaseDialect
 }
 
+const noContentResultMarker = "_no_content"
+
 func NewSQLRunStoreWithDialect(db *sql.DB, dialect DatabaseDialect) (*SQLRunStore, error) {
 	if db == nil {
 		return nil, fmt.Errorf("write database is required")
@@ -96,7 +98,7 @@ func (s *SQLRunStore) SaveResult(ctx context.Context, run Run, templateVersion s
 	if err != nil {
 		return fmt.Errorf("marshal fallbacks: %w", err)
 	}
-	data, err := json.Marshal(result.Data)
+	data, err := json.Marshal(storedResultData(result))
 	if err != nil {
 		return fmt.Errorf("marshal result data: %w", err)
 	}
@@ -150,6 +152,14 @@ WHERE id = ?`, result.Version, time.Now().UTC(), run.ID)
 		return fmt.Errorf("commit generation result: %w", err)
 	}
 	return nil
+}
+
+func storedResultData(result Result) map[string]any {
+	data := canonicalInputs(result.Data)
+	if result.NoContent {
+		data[noContentResultMarker] = true
+	}
+	return data
 }
 
 func (s *SQLRunStore) LoadRun(ctx context.Context, id string) (Run, error) {
@@ -313,6 +323,8 @@ func decodeResult(result Result, template TemplateID, templateVersion string, fi
 	if err := json.Unmarshal(data, &result.Data); err != nil {
 		return Result{}, fmt.Errorf("decode result data: %w", err)
 	}
+	result.NoContent, _ = result.Data[noContentResultMarker].(bool)
+	delete(result.Data, noContentResultMarker)
 	result.Envelope.Template = template
 	result.Envelope.TemplateVersion = templateVersion
 	result.Envelope.ResultVersion = result.Version

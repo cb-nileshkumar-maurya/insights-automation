@@ -147,6 +147,53 @@ func TestLocalServiceMakesMissingHistoricalSourceVisible(t *testing.T) {
 	t.Fatal("missing historical source was not reported")
 }
 
+func TestServiceReturnsNoContentForCompletedNoHistoryH2HRecord(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service, err := app.New(ctx, app.Config{
+		WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: filepath.Join(t.TempDir(), "generation.db")},
+		Data:          &generation.ScriptedCricketData{Responses: map[generation.TemplateID]generation.GeneratedData{generation.H2HRecord: {NoContent: true}}},
+		MatchContext:  testMatchContext(),
+		WorkerPoll:    time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	go service.Run(ctx)
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+
+	response, err := http.Post(server.URL+"/v1/runs", "application/json", bytes.NewBufferString(`{"target":{"template":"h2h_record"},"match_id":"m-1","card_state":"pre_toss"}`))
+	if err != nil || response.StatusCode != http.StatusAccepted {
+		t.Fatalf("submit status=%v err=%v", response, err)
+	}
+	var submitted struct {
+		ResultLocator string `json:"result_locator"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&submitted); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		response, err = http.Get(server.URL + "/v1/results/" + submitted.ResultLocator)
+		if err == nil && response.StatusCode == http.StatusNoContent {
+			if response.ContentLength > 0 {
+				t.Fatalf("content length=%d", response.ContentLength)
+			}
+			response.Body.Close()
+			return
+		}
+		if response != nil {
+			response.Body.Close()
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("no-history H2H result did not become no content")
+}
+
 func TestServiceReturnsOneLocatorPerCardSetTemplate(t *testing.T) {
 	ctx := context.Background()
 	service, err := app.New(ctx, app.Config{WriteDatabase: generation.DatabaseConfig{Dialect: generation.SQLite, DSN: filepath.Join(t.TempDir(), "generation.db")}, MatchContext: testMatchContext()})

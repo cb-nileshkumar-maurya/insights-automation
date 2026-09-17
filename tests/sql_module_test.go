@@ -217,7 +217,7 @@ func TestSQLModuleKeepsSuccessfulChildCurrentWhenCardSetChildFails(t *testing.T)
 	if err != nil || completed.State != CompletedWithErrors {
 		t.Fatalf("parent=%#v err=%v", completed, err)
 	}
-	result, err := module.GetCurrentResult(ctx, H2HRecord, "m-1", PreToss, map[string]any{"team_a": "1", "team_b": "2", "format": "t20", "latest_matches": 10})
+	result, err := module.GetCurrentResult(ctx, H2HRecord, "m-1", PreToss, map[string]any{"team_a": "1", "team_b": "2", "format": "t20", "venue": "4", "latest_matches": 10})
 	if err != nil || result.Version != 1 {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}

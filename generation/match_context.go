@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 var (
@@ -25,6 +26,8 @@ type MatchContext struct {
 	TeamA, TeamB int
 	Format       string
 	Venue        int
+	Country      int
+	Start        time.Time
 	Players      []MatchPlayer
 }
 
@@ -43,7 +46,7 @@ func NewMariaDBMatchContextResolver(db *sql.DB) *MariaDBMatchContextResolver {
 func (resolver *MariaDBMatchContextResolver) ResolveMatchContext(ctx context.Context, matchID string) (MatchContext, error) {
 	var context MatchContext
 	var matchType int
-	err := resolver.db.QueryRowContext(ctx, `SELECT match_record.teama, match_record.teamb, match_record.match_type_id, COALESCE(venue.id, 0) FROM krik_match_archive match_record LEFT JOIN krik_match_venue venue ON venue.id = match_record.venueid WHERE match_record.id = ?`, matchID).Scan(&context.TeamA, &context.TeamB, &matchType, &context.Venue)
+	err := resolver.db.QueryRowContext(ctx, `SELECT match_record.teama, match_record.teamb, match_record.match_type_id, COALESCE(venue.id, 0), COALESCE(venue.country_id, 0), match_record.startdt FROM krik_match_archive match_record LEFT JOIN krik_match_venue venue ON venue.id = match_record.venueid WHERE match_record.id = ?`, matchID).Scan(&context.TeamA, &context.TeamB, &matchType, &context.Venue, &context.Country, &context.Start)
 	if err == sql.ErrNoRows {
 		return MatchContext{}, fmt.Errorf("%w for match_id %s", ErrMatchNotFound, matchID)
 	}

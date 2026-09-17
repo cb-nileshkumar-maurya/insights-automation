@@ -92,7 +92,7 @@ func (w *SQLWorker) ProcessOne(ctx context.Context) (bool, error) {
 		slog.Warn("generation run exceeded deadline", "run_id", run.ID, "template", run.Target.Template, "match_id", run.MatchID, "deadline", w.deadline)
 		return true, w.finishFailure(ctx, run, hash, &RunFailure{Kind: TransientFailure, Message: "generation deadline exceeded"})
 	}
-	result := Result{Version: run.ResultVersion + 1, Envelope: ResultEnvelope{Template: run.Target.Template, TemplateVersion: template.Version, NormalizedFilters: canonicalInputs(run.NormalizedInputs), SourceDataWindow: generated.SourceDataWindow, SampleSize: generated.SampleSize, GeneratedAt: w.now(), ResultVersion: run.ResultVersion + 1, Fallbacks: generated.Fallbacks}, Data: generated.Data}
+	result := Result{Version: run.ResultVersion + 1, Envelope: ResultEnvelope{Template: run.Target.Template, TemplateVersion: template.Version, NormalizedFilters: canonicalInputs(run.NormalizedInputs), SourceDataWindow: generated.SourceDataWindow, SampleSize: generated.SampleSize, GeneratedAt: w.now(), ResultVersion: run.ResultVersion + 1, Fallbacks: generated.Fallbacks}, Data: generated.Data, NoContent: generated.NoContent}
 	if err := w.store.SaveResult(ctx, run, template.Version, hash, result); err != nil {
 		slog.Warn("generation result persistence failed", "run_id", run.ID, "template", run.Target.Template, "match_id", run.MatchID, "error", err)
 		return true, w.finishFailure(ctx, run, hash, &RunFailure{Kind: TransientFailure, Message: err.Error()})
