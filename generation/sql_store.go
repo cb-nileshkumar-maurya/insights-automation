@@ -281,19 +281,7 @@ WHERE c.template_id = ? AND c.template_version = ? AND c.match_id = ?
 		}
 		return Result{}, fmt.Errorf("load current generation result: %w", err)
 	}
-	if err := json.Unmarshal(filters, &result.Envelope.NormalizedFilters); err != nil {
-		return Result{}, fmt.Errorf("decode normalized filters: %w", err)
-	}
-	if err := json.Unmarshal(fallbacks, &result.Envelope.Fallbacks); err != nil {
-		return Result{}, fmt.Errorf("decode fallbacks: %w", err)
-	}
-	if err := json.Unmarshal(data, &result.Data); err != nil {
-		return Result{}, fmt.Errorf("decode result data: %w", err)
-	}
-	result.Envelope.Template = template
-	result.Envelope.TemplateVersion = templateVersion
-	result.Envelope.ResultVersion = result.Version
-	return result, nil
+	return decodeResult(result, template, templateVersion, filters, fallbacks, data)
 }
 
 func (s *SQLRunStore) LoadCurrentResultByLocator(ctx context.Context, locator string) (Result, error) {
@@ -312,6 +300,10 @@ WHERE c.input_hash = ?`, locator)
 		}
 		return Result{}, fmt.Errorf("load current result by locator: %w", err)
 	}
+	return decodeResult(result, TemplateID(template), templateVersion, filters, fallbacks, data)
+}
+
+func decodeResult(result Result, template TemplateID, templateVersion string, filters, fallbacks, data []byte) (Result, error) {
 	if err := json.Unmarshal(filters, &result.Envelope.NormalizedFilters); err != nil {
 		return Result{}, fmt.Errorf("decode normalized filters: %w", err)
 	}
@@ -321,7 +313,7 @@ WHERE c.input_hash = ?`, locator)
 	if err := json.Unmarshal(data, &result.Data); err != nil {
 		return Result{}, fmt.Errorf("decode result data: %w", err)
 	}
-	result.Envelope.Template = TemplateID(template)
+	result.Envelope.Template = template
 	result.Envelope.TemplateVersion = templateVersion
 	result.Envelope.ResultVersion = result.Version
 	return result, nil
