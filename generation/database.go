@@ -67,7 +67,6 @@ func ReadReplicaConfigFromEnvironment() (DatabaseConfig, error) {
 	config := mysql.NewConfig()
 	config.User, config.Passwd, config.Net, config.Addr, config.DBName = username, password, "tcp", host, database
 	config.ParseTime, config.Loc, config.TLSConfig = true, time.UTC, "preferred"
-	config.Params = map[string]string{"zeroDateTimeBehavior": "round", "characterEncoding": "UTF-8"}
 	return DatabaseConfig{Dialect: MariaDB, DSN: config.FormatDSN()}, nil
 }
 
