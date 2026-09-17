@@ -19,6 +19,8 @@ type MatchPlayer struct {
 	FullName string
 }
 
+// MatchContext is the server-derived input shared by card templates. Keeping
+// it separate from request inputs prevents clients from changing match facts.
 type MatchContext struct {
 	TeamA, TeamB int
 	Format       string
@@ -26,6 +28,8 @@ type MatchContext struct {
 	Players      []MatchPlayer
 }
 
+// MatchContextResolver reads authoritative match facts and its recorded squad.
+// Player templates use the squad to validate an optional player selection.
 type MatchContextResolver interface {
 	ResolveMatchContext(context.Context, string) (MatchContext, error)
 }

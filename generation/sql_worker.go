@@ -8,8 +8,11 @@ import (
 )
 
 const (
-	workerLimit       = 4
+	// workerLimit caps concurrent historical queries across every worker in this process.
+	workerLimit = 4
+	// executionDeadline ends stuck work before it can occupy a worker forever.
 	executionDeadline = 45 * time.Second
+	// heartbeatInterval stays below the 60-second SQL lease renewed by workers.
 	heartbeatInterval = 15 * time.Second
 )
 

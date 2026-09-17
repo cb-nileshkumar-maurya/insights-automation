@@ -16,6 +16,8 @@ import (
 	"github.com/cricbuzz/insights-automation/generation"
 )
 
+// Config supplies host-owned dependencies. Historical reads and match-context
+// resolution stay outside the HTTP request so clients cannot choose them.
 type Config struct {
 	WriteDatabase generation.DatabaseConfig
 	Data          generation.CricketData
@@ -27,6 +29,7 @@ type Config struct {
 	Ready         func(context.Context) error
 }
 
+// Service owns the durable run queue and exposes its submission and result APIs.
 type Service struct {
 	store        *generation.SQLRunStore
 	module       *generation.SQLModule
@@ -42,6 +45,8 @@ type Service struct {
 // receive a role from an authenticated adapter, never from request JSON.
 type RoleResolver func(*http.Request) (generation.Role, error)
 
+// New creates a service and applies the SQLite schema only for local stores.
+// Production schema ownership remains with the production database deployment.
 func New(ctx context.Context, config Config) (*Service, error) {
 	store, err := generation.OpenSQLRunStore(ctx, config.WriteDatabase)
 	if err != nil {

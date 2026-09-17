@@ -51,6 +51,8 @@ func OpenSQLRunStore(ctx context.Context, config DatabaseConfig) (*SQLRunStore, 
 	return store, nil
 }
 
+// ReadReplicaConfigFromEnvironment reads the read-only historical source.
+// It intentionally does not use the generation write-database configuration.
 func ReadReplicaConfigFromEnvironment() (DatabaseConfig, error) {
 	username := os.Getenv("SITE_DB_USERNAME_NOMAD")
 	password := os.Getenv("SITE_DB_PASSWORD_NOMAD")
@@ -69,6 +71,8 @@ func ReadReplicaConfigFromEnvironment() (DatabaseConfig, error) {
 	return DatabaseConfig{Dialect: MariaDB, DSN: config.FormatDSN()}, nil
 }
 
+// OpenReadReplica opens the historical MariaDB source used to derive context
+// and generate cards. Generation runs and results are written separately.
 func OpenReadReplica(ctx context.Context) (*sql.DB, error) {
 	config, err := ReadReplicaConfigFromEnvironment()
 	if err != nil {

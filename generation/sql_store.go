@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// SQLRunStore owns the project's write database. The application supplies a
-// MariaDB-compatible sql.DB configured with write credentials.
+// SQLRunStore owns durable generation writes. It supports local SQLite and
+// production MariaDB; historical cricket reads deliberately live elsewhere.
 type SQLRunStore struct {
 	db      *sql.DB
 	dialect DatabaseDialect

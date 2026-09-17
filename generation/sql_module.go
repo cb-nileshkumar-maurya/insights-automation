@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// SQLModule is the production generation-module implementation. Its queue and
-// result state live in SQL; MemoryRunStore remains only a deterministic test adapter.
+// SQLModule coordinates idempotent submissions and locator lookups. SQL keeps
+// queue and result state durable across service restarts.
 type SQLModule struct {
 	config Configuration
 	store  *SQLRunStore
