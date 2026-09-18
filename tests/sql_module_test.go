@@ -2,12 +2,14 @@ package tests
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	. "github.com/cricbuzz/insights-automation/generation"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type generationHarness struct {
@@ -231,6 +233,43 @@ func TestSQLModuleRejectsUnapprovedMatchCount(t *testing.T) {
 	}
 }
 
+func TestFreshSQLiteSchemaUsesExplicitGenerationIdentities(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "generation.db")
+	store, err := OpenSQLRunStore(context.Background(), DatabaseConfig{Dialect: SQLite, DSN: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for table, column := range map[string]string{"generation_runs": "generation_run_id", "generation_results": "generation_result_id", "generation_result_pointers": "result_locator"} {
+		rows, err := db.Query("PRAGMA table_info(" + table + ")")
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for rows.Next() {
+			var cid int
+			var name, typ string
+			var notNull, primaryKey int
+			var defaultValue any
+			if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &primaryKey); err != nil {
+				t.Fatal(err)
+			}
+			found = found || name == column
+		}
+		rows.Close()
+		if !found {
+			t.Fatalf("%s.%s is missing", table, column)
+		}
+	}
+}
 func TestSQLModuleReconciliationJoinsActiveCardSetAndSkipsHealthyWrites(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenSQLRunStore(ctx, DatabaseConfig{Dialect: SQLite, DSN: filepath.Join(t.TempDir(), "reconciliation.db")})

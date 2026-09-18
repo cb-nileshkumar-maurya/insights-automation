@@ -69,7 +69,7 @@ func (w *SQLWorker) ProcessOne(ctx context.Context) (bool, error) {
 	if err != nil || !claimed {
 		return claimed, err
 	}
-	slog.Debug("generation worker claimed run", "run_id", run.ID, "parent_run_id", run.ParentID, "template", run.Target.Template, "match_id", run.MatchID, "attempt", run.Attempt, "worker_id", w.workerID)
+	slog.Debug("generation worker claimed run", "generation_run_id", run.ID, "parent_generation_run_id", run.ParentID, "template", run.Target.Template, "match_id", run.MatchID, "attempt", run.Attempt, "worker_id", w.workerID)
 	template, ok := w.config.Templates[run.Target.Template]
 	if !ok {
 		return true, w.finishFailure(ctx, run, "", &RunFailure{Kind: ConfigurationFailure, Message: "unknown card template"})
@@ -97,7 +97,7 @@ func (w *SQLWorker) ProcessOne(ctx context.Context) (bool, error) {
 		slog.Warn("generation result persistence failed", "run_id", run.ID, "template", run.Target.Template, "match_id", run.MatchID, "error", err)
 		return true, w.finishFailure(ctx, run, hash, &RunFailure{Kind: TransientFailure, Message: err.Error()})
 	}
-	slog.Info("generation run completed", "run_id", run.ID, "parent_run_id", run.ParentID, "template", run.Target.Template, "match_id", run.MatchID, "result_version", result.Version, "sample_size", result.Envelope.SampleSize)
+	slog.Info("generation run completed", "generation_run_id", run.ID, "parent_generation_run_id", run.ParentID, "template", run.Target.Template, "match_id", run.MatchID, "result_version", result.Version, "sample_size", result.Envelope.SampleSize)
 	return true, w.store.RefreshParentStatus(ctx, run.ParentID)
 }
 

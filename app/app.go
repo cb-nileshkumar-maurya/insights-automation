@@ -182,7 +182,7 @@ func (s *Service) submitRun(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusInternalServerError, err.Error())
 		return
 	}
-	slog.Info("generation run accepted", "run_id", run.ID, "parent_run_id", run.ParentID, "template", submitted.Target.Template, "card_set", submitted.Target.CardSet, "match_id", submitted.MatchID, "card_state", submitted.CardState, "mode", run.Mode, "role", role)
+	slog.Info("generation run accepted", "generation_run_id", run.ID, "parent_generation_run_id", run.ParentID, "template", submitted.Target.Template, "card_set", submitted.Target.CardSet, "match_id", submitted.MatchID, "card_state", submitted.CardState, "mode", run.Mode, "role", role)
 	if submitted.Target.Template != "" {
 		writeJSON(writer, http.StatusAccepted, map[string]string{"result_locator": locators[submitted.Target.Template]})
 		return

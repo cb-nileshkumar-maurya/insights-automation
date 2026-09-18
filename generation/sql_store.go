@@ -52,11 +52,11 @@ func (s *SQLRunStore) SaveRun(ctx context.Context, run Run, templateVersion stri
 	if s.dialect == SQLite {
 		_, err = s.db.ExecContext(ctx, `
 INSERT INTO generation_runs (
- id, parent_id, template_id, card_set_id, template_version, match_id, card_state,
- normalized_inputs, input_hash, mode, state, attempt, priority, result_version,
+ generation_run_id, parent_generation_run_id, template_id, card_set_id, template_version, match_id, card_state,
+ normalized_inputs, result_locator, mode, state, attempt, priority, result_version,
  failure_kind, failure_message, lease_until, available_at, created_at, updated_at
 ) VALUES (?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET
+ON CONFLICT(generation_run_id) DO UPDATE SET
  state = excluded.state, attempt = excluded.attempt, result_version = excluded.result_version,
  failure_kind = excluded.failure_kind, failure_message = excluded.failure_message,
  lease_until = excluded.lease_until, updated_at = excluded.updated_at`,
@@ -71,8 +71,8 @@ ON CONFLICT(id) DO UPDATE SET
 	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO generation_runs (
-  id, parent_id, template_id, card_set_id, template_version, match_id, card_state,
-  normalized_inputs, input_hash, mode, state, attempt, priority, result_version,
+  generation_run_id, parent_generation_run_id, template_id, card_set_id, template_version, match_id, card_state,
+  normalized_inputs, result_locator, mode, state, attempt, priority, result_version,
   failure_kind, failure_message, lease_until, available_at, created_at, updated_at
 ) VALUES (?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?, NULLIF(?, '0000-00-00 00:00:00'), ?, ?, ?)
 ON DUPLICATE KEY UPDATE
@@ -109,8 +109,8 @@ func (s *SQLRunStore) SaveResult(ctx context.Context, run Run, templateVersion s
 	defer tx.Rollback()
 	stored, err := tx.ExecContext(ctx, `
 INSERT INTO generation_results (
-  run_id, template_id, template_version, match_id, card_state, normalized_inputs,
-  input_hash, result_version, source_data_window, sample_size, fallbacks, result_data, generated_at
+  generation_run_id, template_id, template_version, match_id, card_state, normalized_inputs,
+  result_locator, result_version, source_data_window, sample_size, fallbacks, result_data, generated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.ID, run.Target.Template, templateVersion, run.MatchID, run.CardState, filters,
 		inputHash, result.Version, result.Envelope.SourceDataWindow, result.Envelope.SampleSize,
@@ -123,16 +123,16 @@ INSERT INTO generation_results (
 		return fmt.Errorf("read generation result id: %w", err)
 	}
 	currentResultStatement := `
-INSERT INTO current_generation_results (
-  template_id, template_version, match_id, card_state, input_hash, generation_result_id, updated_at
+INSERT INTO generation_result_pointers (
+  template_id, template_version, match_id, card_state, result_locator, generation_result_id, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE generation_result_id = VALUES(generation_result_id), updated_at = VALUES(updated_at)`
 	if s.dialect == SQLite {
 		currentResultStatement = `
-INSERT INTO current_generation_results (
-  template_id, template_version, match_id, card_state, input_hash, generation_result_id, updated_at
+INSERT INTO generation_result_pointers (
+  template_id, template_version, match_id, card_state, result_locator, generation_result_id, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(template_id, template_version, match_id, card_state, input_hash)
+ON CONFLICT(template_id, template_version, match_id, card_state, result_locator)
 DO UPDATE SET generation_result_id = excluded.generation_result_id, updated_at = excluded.updated_at`
 	}
 	_, err = tx.ExecContext(ctx, currentResultStatement,
@@ -144,7 +144,7 @@ DO UPDATE SET generation_result_id = excluded.generation_result_id, updated_at =
 UPDATE generation_runs
 SET state = 'succeeded', result_version = ?, lease_owner = NULL, lease_until = NULL,
   updated_at = ?
-WHERE id = ?`, result.Version, time.Now().UTC(), run.ID)
+WHERE generation_run_id = ?`, result.Version, time.Now().UTC(), run.ID)
 	if err != nil {
 		return fmt.Errorf("complete generation run: %w", err)
 	}
@@ -164,10 +164,10 @@ func storedResultData(result Result) map[string]any {
 
 func (s *SQLRunStore) LoadRun(ctx context.Context, id string) (Run, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, COALESCE(parent_id, ''), COALESCE(template_id, ''), COALESCE(card_set_id, ''),
+SELECT generation_run_id, COALESCE(parent_generation_run_id, ''), COALESCE(template_id, ''), COALESCE(card_set_id, ''),
   match_id, card_state, normalized_inputs, mode, state, attempt, COALESCE(result_version, 0),
   COALESCE(failure_kind, ''), COALESCE(failure_message, ''), lease_until, created_at
-FROM generation_runs WHERE id = ?`, id)
+FROM generation_runs WHERE generation_run_id = ?`, id)
 	var run Run
 	var inputs []byte
 	var template, cardSet, state, mode, cardState, failureKind, failureMessage string
@@ -189,7 +189,7 @@ FROM generation_runs WHERE id = ?`, id)
 	if failureKind != "" {
 		run.Failure = &RunFailure{Kind: FailureKind(failureKind), Message: failureMessage}
 	}
-	children, err := s.db.QueryContext(ctx, `SELECT id FROM generation_runs WHERE parent_id = ? ORDER BY created_at`, run.ID)
+	children, err := s.db.QueryContext(ctx, `SELECT generation_run_id FROM generation_runs WHERE parent_generation_run_id = ? ORDER BY created_at`, run.ID)
 	if err != nil {
 		return Run{}, fmt.Errorf("load child generation runs: %w", err)
 	}
@@ -264,7 +264,7 @@ func (s *SQLRunStore) FindActiveRun(ctx context.Context, target CardTarget, matc
 	if target.CardSet != "" {
 		column, targetID = "card_set_id", target.CardSet
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT id FROM generation_runs WHERE `+column+` = ? AND match_id = ? AND card_state = ? AND input_hash = ? AND mode = ? AND state IN ('queued', 'running') ORDER BY created_at LIMIT 1`, targetID, matchID, cardState, inputHash, mode)
+	row := s.db.QueryRowContext(ctx, `SELECT generation_run_id FROM generation_runs WHERE `+column+` = ? AND match_id = ? AND card_state = ? AND result_locator = ? AND mode = ? AND state IN ('queued', 'running') ORDER BY created_at LIMIT 1`, targetID, matchID, cardState, inputHash, mode)
 	var id string
 	if err := row.Scan(&id); err != nil {
 		if err == sql.ErrNoRows {
@@ -279,10 +279,10 @@ func (s *SQLRunStore) LoadCurrentResult(ctx context.Context, template TemplateID
 	row := s.db.QueryRowContext(ctx, `
 SELECT r.result_version, r.normalized_inputs, r.source_data_window, r.sample_size,
   r.fallbacks, r.result_data, r.generated_at
-FROM current_generation_results c
-JOIN generation_results r ON r.id = c.generation_result_id
+FROM generation_result_pointers c
+JOIN generation_results r ON r.generation_result_id = c.generation_result_id
 WHERE c.template_id = ? AND c.template_version = ? AND c.match_id = ?
-  AND c.card_state = ? AND c.input_hash = ?`, template, templateVersion, matchID, cardState, inputHash)
+  AND c.card_state = ? AND c.result_locator = ?`, template, templateVersion, matchID, cardState, inputHash)
 	var result Result
 	var filters, fallbacks, data []byte
 	if err := row.Scan(&result.Version, &filters, &result.Envelope.SourceDataWindow, &result.Envelope.SampleSize, &fallbacks, &data, &result.Envelope.GeneratedAt); err != nil {
@@ -298,9 +298,9 @@ func (s *SQLRunStore) LoadCurrentResultByLocator(ctx context.Context, locator st
 	row := s.db.QueryRowContext(ctx, `
 SELECT c.template_id, c.template_version, r.result_version, r.normalized_inputs,
   r.source_data_window, r.sample_size, r.fallbacks, r.result_data, r.generated_at
-FROM current_generation_results c
-JOIN generation_results r ON r.id = c.generation_result_id
-WHERE c.input_hash = ?`, locator)
+FROM generation_result_pointers c
+JOIN generation_results r ON r.generation_result_id = c.generation_result_id
+WHERE c.result_locator = ?`, locator)
 	var result Result
 	var template, templateVersion string
 	var filters, fallbacks, data []byte
@@ -332,7 +332,7 @@ func decodeResult(result Result, template TemplateID, templateVersion string, fi
 }
 
 func (s *SQLRunStore) LoadLatestRunByLocator(ctx context.Context, locator string) (Run, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id FROM generation_runs WHERE template_id IS NOT NULL AND input_hash = ? ORDER BY created_at DESC LIMIT 1`, locator)
+	row := s.db.QueryRowContext(ctx, `SELECT generation_run_id FROM generation_runs WHERE template_id IS NOT NULL AND result_locator = ? ORDER BY created_at DESC LIMIT 1`, locator)
 	var id string
 	if err := row.Scan(&id); err != nil {
 		if err == sql.ErrNoRows {
@@ -353,13 +353,13 @@ func (s *SQLRunStore) ClaimNext(ctx context.Context, workerID string, now time.T
 	defer tx.Rollback()
 	var id string
 	claimStatement := `
-SELECT id FROM generation_runs
+SELECT generation_run_id FROM generation_runs
 WHERE state = 'queued' AND available_at <= ? AND template_id IS NOT NULL
 ORDER BY priority DESC, created_at ASC
 LIMIT 1 FOR UPDATE SKIP LOCKED`
 	if s.dialect == SQLite {
 		claimStatement = `
-SELECT id FROM generation_runs
+SELECT generation_run_id FROM generation_runs
 WHERE state = 'queued' AND available_at <= ? AND template_id IS NOT NULL
 ORDER BY priority DESC, created_at ASC LIMIT 1`
 	}
@@ -374,7 +374,7 @@ ORDER BY priority DESC, created_at ASC LIMIT 1`
 	if _, err := tx.ExecContext(ctx, `
 UPDATE generation_runs
 SET state = 'running', lease_owner = ?, lease_until = ?, updated_at = ?
-WHERE id = ?`, workerID, leaseUntil, now, id); err != nil {
+WHERE generation_run_id = ?`, workerID, leaseUntil, now, id); err != nil {
 		return Run{}, false, fmt.Errorf("lease generation run: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -391,7 +391,7 @@ func (s *SQLRunStore) RenewLease(ctx context.Context, runID, workerID string, no
 	updated, err := s.db.ExecContext(ctx, `
 UPDATE generation_runs
 SET lease_until = ?, updated_at = ?
-WHERE id = ? AND state = 'running' AND lease_owner = ?`, now.Add(60*time.Second), now, runID, workerID)
+WHERE generation_run_id = ? AND state = 'running' AND lease_owner = ?`, now.Add(60*time.Second), now, runID, workerID)
 	if err != nil {
 		return false, fmt.Errorf("renew generation lease: %w", err)
 	}
@@ -422,7 +422,7 @@ func (s *SQLRunStore) Requeue(ctx context.Context, runID string, attempt int, av
 UPDATE generation_runs
 SET state = 'queued', attempt = ?, failure_kind = ?, failure_message = ?,
   lease_owner = NULL, lease_until = NULL, available_at = ?, updated_at = ?
-WHERE id = ?`, attempt, failure.Kind, failure.Message, availableAt, time.Now().UTC(), runID)
+WHERE generation_run_id = ?`, attempt, failure.Kind, failure.Message, availableAt, time.Now().UTC(), runID)
 	if err != nil {
 		return fmt.Errorf("requeue generation run: %w", err)
 	}
@@ -434,7 +434,7 @@ func (s *SQLRunStore) Fail(ctx context.Context, runID string, failure *RunFailur
 UPDATE generation_runs
 SET state = 'failed', failure_kind = ?, failure_message = ?,
   lease_owner = NULL, lease_until = NULL, updated_at = ?
-WHERE id = ?`, failure.Kind, failure.Message, time.Now().UTC(), runID)
+WHERE generation_run_id = ?`, failure.Kind, failure.Message, time.Now().UTC(), runID)
 	if err != nil {
 		return fmt.Errorf("fail generation run: %w", err)
 	}
@@ -448,7 +448,7 @@ func (s *SQLRunStore) RefreshParentStatus(ctx context.Context, parentID string) 
 	var total, succeeded, failed int
 	err := s.db.QueryRowContext(ctx, `
 SELECT COUNT(*), SUM(state = 'succeeded'), SUM(state = 'failed')
-FROM generation_runs WHERE parent_id = ?`, parentID).Scan(&total, &succeeded, &failed)
+FROM generation_runs WHERE parent_generation_run_id = ?`, parentID).Scan(&total, &succeeded, &failed)
 	if err != nil {
 		return fmt.Errorf("count child generation runs: %w", err)
 	}
@@ -461,7 +461,7 @@ FROM generation_runs WHERE parent_id = ?`, parentID).Scan(&total, &succeeded, &f
 	} else if failed > 0 {
 		state = CompletedWithErrors
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE generation_runs SET state = ?, updated_at = ? WHERE id = ?`, state, time.Now().UTC(), parentID)
+	_, err = s.db.ExecContext(ctx, `UPDATE generation_runs SET state = ?, updated_at = ? WHERE generation_run_id = ?`, state, time.Now().UTC(), parentID)
 	if err != nil {
 		return fmt.Errorf("update parent generation run: %w", err)
 	}

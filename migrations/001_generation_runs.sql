@@ -1,13 +1,13 @@
 CREATE TABLE generation_runs (
-    id CHAR(36) NOT NULL,
-    parent_id CHAR(36) NULL,
+    generation_run_id CHAR(36) NOT NULL,
+    parent_generation_run_id CHAR(36) NULL,
     template_id VARCHAR(64) NULL,
     card_set_id VARCHAR(64) NULL,
     template_version VARCHAR(32) NULL,
     match_id VARCHAR(64) NOT NULL,
     card_state VARCHAR(32) NOT NULL,
     normalized_inputs JSON NOT NULL,
-    input_hash CHAR(64) NOT NULL,
+    result_locator CHAR(64) NOT NULL,
     mode VARCHAR(32) NOT NULL,
     state VARCHAR(32) NOT NULL,
     attempt TINYINT UNSIGNED NOT NULL DEFAULT 0,
@@ -20,41 +20,41 @@ CREATE TABLE generation_runs (
     available_at DATETIME(6) NOT NULL,
     created_at DATETIME(6) NOT NULL,
     updated_at DATETIME(6) NOT NULL,
-    PRIMARY KEY (id),
+    PRIMARY KEY (generation_run_id),
     KEY generation_runs_claim (state, available_at, priority, created_at),
-    KEY generation_runs_active (template_id, template_version, match_id, card_state, input_hash, state),
-    KEY generation_runs_parent (parent_id),
+    KEY generation_runs_active (template_id, template_version, match_id, card_state, result_locator, state),
+    KEY generation_runs_parent (parent_generation_run_id),
     CONSTRAINT generation_runs_target CHECK ((template_id IS NULL) <> (card_set_id IS NULL))
 );
 
 CREATE TABLE generation_results (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    run_id CHAR(36) NOT NULL,
+    generation_result_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    generation_run_id CHAR(36) NOT NULL,
     template_id VARCHAR(64) NOT NULL,
     template_version VARCHAR(32) NOT NULL,
     match_id VARCHAR(64) NOT NULL,
     card_state VARCHAR(32) NOT NULL,
     normalized_inputs JSON NOT NULL,
-    input_hash CHAR(64) NOT NULL,
+    result_locator CHAR(64) NOT NULL,
     result_version INT UNSIGNED NOT NULL,
     source_data_window VARCHAR(255) NOT NULL,
     sample_size INT UNSIGNED NOT NULL,
     fallbacks JSON NOT NULL,
     result_data JSON NOT NULL,
     generated_at DATETIME(6) NOT NULL,
-    PRIMARY KEY (id),
-    UNIQUE KEY generation_results_version (template_id, template_version, match_id, card_state, input_hash, result_version),
-    CONSTRAINT generation_results_run_fk FOREIGN KEY (run_id) REFERENCES generation_runs(id)
+    PRIMARY KEY (generation_result_id),
+    UNIQUE KEY generation_results_version (template_id, template_version, match_id, card_state, result_locator, result_version),
+    CONSTRAINT generation_results_run_fk FOREIGN KEY (generation_run_id) REFERENCES generation_runs(generation_run_id)
 );
 
-CREATE TABLE current_generation_results (
+CREATE TABLE generation_result_pointers (
     template_id VARCHAR(64) NOT NULL,
     template_version VARCHAR(32) NOT NULL,
     match_id VARCHAR(64) NOT NULL,
     card_state VARCHAR(32) NOT NULL,
-    input_hash CHAR(64) NOT NULL,
+    result_locator CHAR(64) NOT NULL,
     generation_result_id BIGINT UNSIGNED NOT NULL,
     updated_at DATETIME(6) NOT NULL,
-    PRIMARY KEY (template_id, template_version, match_id, card_state, input_hash),
-    CONSTRAINT current_generation_results_result_fk FOREIGN KEY (generation_result_id) REFERENCES generation_results(id)
+    PRIMARY KEY (template_id, template_version, match_id, card_state, result_locator),
+    CONSTRAINT generation_result_pointers_result_fk FOREIGN KEY (generation_result_id) REFERENCES generation_results(generation_result_id)
 );
