@@ -22,11 +22,7 @@ func (g *PlayerVenueGenerator) Generate(ctx context.Context, query GenerationQue
 	if query.Template != PlayerStatsAtVenue {
 		return GeneratedData{Err: &RunFailure{Kind: ConfigurationFailure, Message: "Player Stats at Venue generator received another template"}}
 	}
-	players, err := playerIDs(query.Inputs["players"])
-	if err != nil {
-		return invalidH2H(err)
-	}
-	playerContext, err := playerContext(query.Inputs["player_context"])
+	population, err := playerPopulationFrom(query.Inputs)
 	if err != nil {
 		return invalidH2H(err)
 	}
@@ -39,16 +35,16 @@ func (g *PlayerVenueGenerator) Generate(ctx context.Context, query GenerationQue
 		return invalidH2H(err)
 	}
 	window := query.Inputs["window"].(string)
-	batting, bowling, err := g.history.PlayerVenueStats(ctx, players, venue, format, window, false)
+	batting, bowling, err := g.history.PlayerVenueStats(ctx, population.ids, venue, format, window, false)
 	if err != nil {
 		return GeneratedData{Err: &RunFailure{Kind: TransientFailure, Message: err.Error()}}
 	}
-	careerBatting, careerBowling, err := g.history.PlayerVenueStats(ctx, players, venue, format, "career", true)
+	careerBatting, careerBowling, err := g.history.PlayerVenueStats(ctx, population.ids, venue, format, "career", true)
 	if err != nil {
 		return GeneratedData{Err: &RunFailure{Kind: TransientFailure, Message: err.Error()}}
 	}
-	entries, fallbacks, sample := make([]any, 0, len(players)), []string{}, 0
-	for _, player := range players {
+	entries, fallbacks, sample := make([]any, 0, len(population.ids)), []string{}, 0
+	for _, player := range population.ids {
 		bat := batting[player]
 		bowl := bowling[player]
 		batFallback, bowlFallback := false, false
@@ -67,53 +63,10 @@ func (g *PlayerVenueGenerator) Generate(ctx context.Context, query GenerationQue
 		if bowlFallback {
 			fallbacks = append(fallbacks, fmt.Sprintf("player_%d_bowling_career", player))
 		}
-		identity := playerContext[player]
+		identity := population.identities[player]
 		entries = append(entries, map[string]any{"player_id": player, "team_id": identity.TeamID, "player_name": identity.FullName, "batting": bat, "bowling": bowl, "batting_fallback": batFallback, "bowling_fallback": bowlFallback})
 	}
 	return GeneratedData{Data: map[string]any{"players": entries}, SampleSize: sample, Fallbacks: fallbacks, SourceDataWindow: window}
-}
-
-func playerContext(raw any) (map[int]MatchPlayer, error) {
-	values, ok := raw.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("player_context is required")
-	}
-	players := make(map[int]MatchPlayer, len(values))
-	for id, rawPlayer := range values {
-		playerID, err := inputID(map[string]any{"player": id}, "player")
-		if err != nil {
-			return nil, err
-		}
-		value, ok := rawPlayer.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("player_context must contain player details")
-		}
-		teamID, err := inputID(value, "team_id")
-		if err != nil {
-			return nil, err
-		}
-		name, ok := value["player_name"].(string)
-		if !ok || name == "" {
-			return nil, fmt.Errorf("player_name is required")
-		}
-		players[playerID] = MatchPlayer{ID: playerID, TeamID: teamID, FullName: name}
-	}
-	return players, nil
-}
-func playerIDs(raw any) ([]int, error) {
-	values, ok := raw.([]string)
-	if !ok || len(values) == 0 {
-		return nil, fmt.Errorf("players must be a non-empty stable ID list")
-	}
-	ids := make([]int, 0, len(values))
-	for _, value := range values {
-		id, err := inputID(map[string]any{"player": value}, "player")
-		if err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, nil
 }
 
 type MariaDBPlayerVenueHistory struct{ db *sql.DB }

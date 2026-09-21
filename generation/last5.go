@@ -22,11 +22,7 @@ func (g *Last5GamesGenerator) Generate(ctx context.Context, query GenerationQuer
 	if query.Template != Last5Games {
 		return GeneratedData{Err: &RunFailure{Kind: ConfigurationFailure, Message: "Last 5 Games generator received another template"}}
 	}
-	players, err := playerIDs(query.Inputs["players"])
-	if err != nil {
-		return invalidH2H(err)
-	}
-	playerContext, err := playerContext(query.Inputs["player_context"])
+	population, err := playerPopulationFrom(query.Inputs)
 	if err != nil {
 		return invalidH2H(err)
 	}
@@ -35,18 +31,18 @@ func (g *Last5GamesGenerator) Generate(ctx context.Context, query GenerationQuer
 		return invalidH2H(err)
 	}
 	latest := query.Inputs["latest_matches"].(int)
-	games, careers, err := g.history.LastGames(ctx, players, format, latest)
+	games, careers, err := g.history.LastGames(ctx, population.ids, format, latest)
 	if err != nil {
 		return GeneratedData{Err: &RunFailure{Kind: TransientFailure, Message: err.Error()}}
 	}
-	entries, fallbacks, sample := make([]any, 0, len(players)), []string{}, 0
-	for _, player := range players {
+	entries, fallbacks, sample := make([]any, 0, len(population.ids)), []string{}, 0
+	for _, player := range population.ids {
 		playerGames := games[player]
 		sample += len(playerGames)
 		if len(playerGames) < latest {
 			fallbacks = append(fallbacks, "player_available_history")
 		}
-		identity := playerContext[player]
+		identity := population.identities[player]
 		entries = append(entries, map[string]any{"player_id": player, "team_id": identity.TeamID, "player_name": identity.FullName, "games": playerGames, "career_comparison": careers[player], "form_arrow": formArrow(playerGames, careers[player]), "available_history": len(playerGames), "insufficient_sample": len(playerGames) == 0})
 	}
 	return GeneratedData{Data: map[string]any{"players": entries}, SampleSize: sample, Fallbacks: fallbacks, SourceDataWindow: "latest games"}

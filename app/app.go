@@ -39,6 +39,7 @@ type Service struct {
 	roleResolver RoleResolver
 	ready        func(context.Context) error
 	matchContext generation.MatchContextResolver
+	config       generation.Configuration
 }
 
 // RoleResolver is the command's authentication boundary. Production callers
@@ -73,7 +74,8 @@ func New(ctx context.Context, config Config) (*Service, error) {
 	if config.RoleResolver == nil {
 		config.RoleResolver = localRole
 	}
-	module := generation.NewSQLModule(generation.DefaultConfiguration(), store, generation.ClockFunc(func() time.Time { return time.Now().UTC() }))
+	generationConfig := generation.DefaultConfiguration()
+	module := generation.NewSQLModule(generationConfig, store, generation.ClockFunc(func() time.Time { return time.Now().UTC() }))
 	if config.Eligible == nil {
 		// Match discovery is injected because the authoritative upcoming-match
 		// and squad population source is deployment-specific.
@@ -93,7 +95,7 @@ func New(ctx context.Context, config Config) (*Service, error) {
 		return nil
 	}
 	slog.Info("insights automation initialized", "write_dialect", config.WriteDatabase.Dialect, "historical_source_configured", historicalSourceConfigured, "worker_id", config.WorkerID)
-	return &Service{store: store, module: module, worker: generation.NewSQLWorker(store, config.Data, generation.DefaultConfiguration(), config.WorkerID), reconciler: generation.NewReconciler(config.Eligible, module, "pre_toss_v1"), workerPoll: config.WorkerPoll, roleResolver: config.RoleResolver, ready: config.Ready, matchContext: config.MatchContext}, nil
+	return &Service{store: store, module: module, worker: generation.NewSQLWorker(store, config.Data, generationConfig, config.WorkerID), reconciler: generation.NewReconciler(config.Eligible, module, "pre_toss_v1"), workerPoll: config.WorkerPoll, roleResolver: config.RoleResolver, ready: config.Ready, matchContext: config.MatchContext, config: generationConfig}, nil
 }
 
 func (s *Service) Close() error { return s.store.Close() }
@@ -196,7 +198,7 @@ func (s *Service) resolvedInputs(ctx context.Context, submitted submitRequest) (
 			return nil, invalidRequestf("%s is derived from match_id and must not be supplied", key)
 		}
 	}
-	templates, ok := targetTemplates(submitted.Target)
+	templates, ok := targetTemplates(s.config, submitted.Target)
 	if !ok {
 		return nil, generation.ErrInvalidRequest
 	}
@@ -247,8 +249,7 @@ func (s *Service) resolvedInputs(ctx context.Context, submitted submitRequest) (
 	return inputs, nil
 }
 
-func targetTemplates(target generation.CardTarget) ([]generation.Template, bool) {
-	config := generation.DefaultConfiguration()
+func targetTemplates(config generation.Configuration, target generation.CardTarget) ([]generation.Template, bool) {
 	if target.Template != "" && target.CardSet != "" {
 		return nil, false
 	}
